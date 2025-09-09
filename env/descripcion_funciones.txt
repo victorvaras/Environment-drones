@@ -1,0 +1,204 @@
+https://chatgpt.com/share/68b9cfc7-60f8-800d-b35a-e20f1ddf8bcc
+
+# Visión general por archivo
+
+* **`dron.py`**
+  Define el modelo mínimo del dron: su posición en 3D, los límites del “escenario” y cómo se mueve en pasos acotados. Es deliberadamente simple para desacoplar el control (Gymnasium) del cálculo de señal (Sionna).
+
+* **`receptores.py`**
+  Define la estructura de un receptor estático y un gestor que entrega las posiciones en un formato conveniente (array `N×3`). Es la “fuente de verdad” para las ubicaciones de los RX.
+
+* **`gymnasium_env.py`**
+  Implementa el **entorno Gymnasium** que orquesta todo: inicializa el dron, conecta los receptores a Sionna (o al fallback), define espacios de acción/observación, calcula recompensas (media de SNR) y maneja el render (humano o `rgb_array`).
+
+* **`sionna.py`**
+  Capa de integración con **Sionna RT** (ray tracing). Construye/carga la escena, registra TX/RX, calcula PRx y SNR. Si Sionna no está disponible, usa un **fallback FSPL** (Friis) para mantener el sistema funcional.
+
+---
+
+# Detalle por archivo, clase y función
+
+## `dron.py`
+
+### Clase `Dron`
+
+* **Propósito:** mantener el estado del dron (posición) y aplicar movimientos con límites.
+* **`__init__(start_xyz, bounds, max_delta)`**
+
+  * **Qué hace:** inicializa la posición en `start_xyz` (x, y, z), guarda una “caja” de límites `bounds` y el máximo paso por acción `max_delta`.
+  * **Por qué:** evita que el dron salga del área válida y que un agente haga saltos físicamente poco razonables.
+* **`step_delta(delta_xyz)`**
+
+  * **Qué hace:** recorta `delta_xyz` a `[-max_delta, max_delta]`, actualiza la posición y la **encierra** en los límites (clip). Devuelve la nueva posición (copia).
+  * **Entradas/Salidas:** `delta_xyz` (array de 3). Retorna `pos` nueva (array de 3).
+
+---
+
+## `receptores.py`
+
+### `@dataclass Receptor`
+
+* **Propósito:** representar un receptor estático con coordenadas `(x, y, z)`.
+* **Notas:** `z` por defecto es `1.5 m` (altura típica de un terminal/antena baja).
+
+### Clase `ReceptoresManager`
+
+* **`__init__(receptores)`**
+  Recibe una lista de `Receptor` y la guarda internamente.
+* **Propiedad `n`**
+  Devuelve el número de receptores.
+* **`positions_xyz()`**
+
+  * **Qué hace:** retorna un `numpy.ndarray` de forma `(N, 3)` con las posiciones `[x, y, z]` de todos los receptores.
+  * **Por qué:** es el formato que Sionna (o el fallback) necesita para calcular PRx/SNR por receptor.
+
+---
+
+## `gymnasium_env.py`
+
+### Clase `DroneEnv(gym.Env)`
+
+**Propósito:** entorno RL compatible con Gymnasium que:
+
+1. controla el **estado** (dron + receptores),
+2. delega el **cálculo de señal** a `SionnaRT`,
+3. define **acción/observación/reward** y **render**.
+
+* **Atributo `metadata`**
+  Declara modos de render soportados: `"human"` y `"rgb_array"`, y un `render_fps` objetivo.
+
+* **`__init__(..., rx_positions=None, frequency_mhz=3500, tx_power_dbm=30, noise_figure_db=7, bandwidth_hz=20e6, scene_name="munich", max_steps=400, render_mode=None, drone_start=(0,0,20))`**
+
+  * **Qué hace:**
+
+    * Acepta posiciones RX externas o genera un set por defecto (8 en anillo).
+    * Crea el **mundo Sionna**: `SionnaRT(...)`, lo construye (`build_scene`) y **adjunta receptores**.
+    * Crea el **dron** en `drone_start`.
+    * Define **espacios**:
+
+      * `action_space`: `Box(-5, 5, shape=(3,))` → delta `(dx, dy, dz)` por paso.
+      * `observation_space`: vector con `3` (posición del dron) + `N` (PRx dBm por receptor).
+    * Configura utilidades de render (figura, ejes, colorbar, etc.).
+  * **Entradas clave:** RF (frecuencia, potencia, NF, BW) y escena (nombre o ruta).
+  * **Notas:** `max_steps` define **truncation** del episodio (no “failure”, solo límite).
+
+* **`reset(seed=None, options=None)`**
+
+  * **Qué hace:** resetea contador de pasos, reubica el dron en el inicio, **mueve** el TX a la posición del dron, **calcula PRx** inicial y devuelve:
+
+    * **obs:** `[x, y, z, PRx_0, PRx_1, ..., PRx_{N-1}]`
+    * **info:** `{}` (vacío al reset, salvo que quieras extender).
+  * **Notas:** limpia/rehace los artistas de render para empezar fresco.
+
+* **`step(action)`**
+
+  * **Qué hace:**
+
+    1. Aplica `action` como delta de dron (`step_delta`) y mueve TX (`move_tx`).
+    2. Obtiene **PRx dBm** y **SNR dB** por receptor (`compute_prx_dbm`, `compute_snr_db`).
+    3. **reward:** promedio de SNR (float).
+    4. Señala `truncated=True` si se alcanzó `max_steps` (no `terminated`).
+    5. Devuelve `(obs, reward, terminated, truncated, info)` donde `info` incluye arrays `snr_db` y `prx_dbm`, y opcionalmente un `frame` si `render_mode="rgb_array"`.
+  * **Por qué:** una señal agregada simple (media SNR) es un buen primer objetivo; luego puedes pasar a objetivos multi-métrica o constraints de energía/altura.
+
+* **Render (métodos privados de ayuda y API Gym):**
+
+  * **`_ensure_figure()`**
+    Garantiza la figura/axes/canvas de Matplotlib; setea títulos/labels y grilla.
+  * **`_render_common()`**
+
+    * Pinta el **dron** (triángulo), los **receptores** (scatter) y colorea por **PRx dBm**.
+    * Actualiza textos (etiquetas numéricas por receptor) y la **colorbar**.
+  * **`_render_to_figure()`**
+    Flujo para modo `"human"`: dibuja, flush de eventos y `plt.pause` según FPS.
+  * **`_render_to_array()`**
+    Renderiza en un buffer y devuelve un **RGB `np.ndarray`** (útil para wrappers de video o training con frames).
+  * **`render()`**
+    Implementación estándar Gym para elegir entre humano/array.
+  * **`close()`**
+    Cierre ordenado de la figura y limpieza de referencias.
+
+---
+
+## `sionna.py`
+
+### Utilidades RF y resolución de escenas
+
+* **`dbm_to_mw(dbm)` / `mw_to_dbm(mw)`**
+  Conversión dBm↔mW (útiles si decides combinar potencias lineales).
+* **`fspl_db(freq_hz, dist_m)`**
+  **Pérdida en espacio libre (Friis)**: `20log10(d) + 20log10(f) - 147.55` (f en Hz, d en m).
+  Se usa en el **fallback** cuando Sionna RT no está disponible.
+* **`_resolve_scene_path(scene_id)`**
+  Busca un `scene.xml` o `<scene_id>.xml` en tu estructura (`.../env/scenes/...` o rutas absolutas). Devuelve la ruta si la encuentra, o `None` para usar escenas integradas.
+
+### `load_builtin_scene(name="munich", frequency_hz=3.5e9, merge_shapes=True)`
+
+* **Qué hace:** carga una **escena integrada** por nombre usando Sionna (si está disponible). Si falla, crea una `Scene()` vacía (para no romper).
+* **Configura también arrays** TX/RX (patrones, polarización) y crea un `PathSolver`.
+
+### Clase `SionnaRT`
+
+**Propósito:** encapsular toda la interacción con Sionna RT y exponer una API simple al entorno.
+
+* **`__init__(frequency_mhz, tx_power_dbm, noise_figure_db, bandwidth_hz, scene_name, max_depth, los, specular_reflection, diffuse_reflection, refraction, seed)`**
+
+  * Guarda parámetros RF y de tracing (profundidad, reflexiones, etc.).
+  * Inicializa flags internos y placeholders para `scene`, `solver`, `tx`, `rx_list`.
+  * Detecta si **Sionna** está disponible y activa el **fallback** si no.
+
+* **`build_scene()`**
+
+  * Si hay Sionna:
+
+    * Intenta cargar XML desde ruta resuelta; si no, usa **escena integrada** (`load_builtin_scene`).
+    * Setea **frecuencia**, **arrays** TX/RX (omni “iso” para comportamiento neutro) y **desactiva** precoder/combiner si existen.
+    * Crea y agrega el **Transmitter** con orientación al **nadir** (pitch `-90°`).
+  * Si **no** hay Sionna: no hace nada especial (operarás con FSPL).
+
+* **`attach_receivers(rx_positions_xyz)`**
+
+  * Con Sionna: crea objetos `Receiver` y los **añade a la escena**.
+  * Sin Sionna: guarda las posiciones en una lista (para FSPL).
+
+* **`move_tx(pos_xyz)`**
+  Mueve el transmisor a la posición del dron y **mantiene** la orientación al nadir.
+
+* **`_paths()`** *(privado)*
+  Ejecuta el `PathSolver` con tus flags (`max_depth`, `los`, reflexiones, etc.) y devuelve caminos para cálculo de CIR.
+
+* **`compute_prx_dbm()`**
+
+  * **Con Sionna RT:**
+
+    1. Obtiene el **CIR** → amplitudes complejas `a`.
+    2. **Suma potencias** `|a|^2` por receptor (maneja dimensiones de forma robusta).
+    3. Convierte a dB sumando **Ptx \[dBm] + 10log10(|h|^2)** → PRx por receptor (dBm).
+  * **Sin Sionna (fallback FSPL):**
+    Calcula distancias TX→RX, aplica `FSPL` y devuelve `Ptx_dBm - FSPL`.
+  * **Salida:** `np.ndarray` de longitud `N` con PRx (dBm).
+
+* **`compute_snr_db(prx_dbm)`**
+  Calcula el **ruido térmico**:
+  `N_dBm = -174 + 10·log10(BW_Hz) + NF_dB`, y retorna `SNR_dB = PRx_dBm - N_dBm`.
+
+* **`preview_scene()`**
+  Llama al visor 3D de Sionna (preferible en Jupyter). Si no es posible, lo indica.
+
+* **`render_scene_to_file(filename="scene.png", resolution=(900,700), with_radio_map=False)`**
+  Renderiza la escena a un PNG; si `with_radio_map=True`, calcula y superpone un radio map (más costoso). Maneja errores de forma segura y devuelve `True/False`.
+
+---
+
+## Cómo fluye todo junto (resumen rápido)
+
+1. **`DroneEnv.reset`** crea/posiciona el dron y llama a **`SionnaRT.compute_prx_dbm`** para obtener PRx inicial (con RT o FSPL).
+2. **`DroneEnv.step`** mueve el dron (`Dron.step_delta`), mueve el TX (`SionnaRT.move_tx`), recalcula **PRx** y de ahí la **SNR**, arma la **recompensa** y actualiza el render si procede.
+3. **`ReceptoresManager`** mantiene posiciones limpias y accesibles para el cálculo.
+
+---
+
+Si quieres, te agrego al tiro:
+
+* Un **diagrama de secuencia** simple del ciclo `reset/step`.
+* Un mini **script de smoke test** que haga 10 pasos aleatorios y devuelva `reward` medio + muestra un frame (`rgb_array`) para validar instalación sin abrir ventana.
