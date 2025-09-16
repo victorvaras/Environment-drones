@@ -17,16 +17,14 @@ from sionna.rt import (
 
 # ---------- Utilidades ----------
 def _resolve_scene_path(scene_id: str) -> str | None:
-    """Devuelve ruta a XML si 'scene_id' es un archivo/carpeta válido
-    o si existe dentro de scenes/. Si no encuentra, devuelve None."""
+    """Devuelve ruta a XML o GLB si 'scene_id' es válido en scenes/ o Mapas-pruebas/."""
+    from pathlib import Path
+
     p = Path(scene_id)
     if p.exists():
-        if p.is_dir():
-            xml = p / "scene.xml"
-            if xml.exists():
-                return str(xml)
-        else:
-            return str(p)
+        return str(p)
+
+    # Buscar en scenes/
     base = Path(__file__).resolve().parents[1] / "scenes"
     cand_xml = base / f"{scene_id}.xml"
     if cand_xml.exists():
@@ -36,7 +34,20 @@ def _resolve_scene_path(scene_id: str) -> str | None:
         xml = cand_dir / "scene.xml"
         if xml.exists():
             return str(xml)
+
+    # Buscar en Mapas-pruebas/
+    base_maps = Path(__file__).resolve().parents[2] / "Mapas-pruebas"
+    # Si ya viene con extensión (ej: plaza.glb), lo busca directo
+    cand_file = base_maps / scene_id
+    if cand_file.exists():
+        return str(cand_file)
+    # Si viene sin extensión, probar .glb
+    cand_glb = base_maps / f"{scene_id}.glb"
+    if cand_glb.exists():
+        return str(cand_glb)
+
     return None
+
 
 def load_builtin_scene(name: str = "munich",
                        frequency_hz: float = 3.5e9,
@@ -104,14 +115,14 @@ class SionnaRT:
                  rx_array_polarization: str = "V",
 
                  # --- pose inicial del transmisor ---
-                 tx_initial_position: tuple[float, float, float] = (0.0, 0.0, 20.0), # [m]
+                 tx_initial_position: tuple[float, float, float] = (0.0, 0.0, 10.0), # [m]
                  tx_orientation_deg: tuple[float, float, float] = (0.0, -90.0, 0.0), # [°] yaw,pitch,roll
 
                  # --- control del trazador de caminos (PathSolver) ---
-                 max_depth: int = 4,              # Nº máx. de interacciones por camino
+                 max_depth: int = 5,              # Nº máx. de interacciones por camino
                  los: bool = True,                # Considerar Line-of-Sight
                  specular_reflection: bool = True,# Reflexiones especulares (reflexiones tipo espejo)
-                 diffuse_reflection: bool = False, # Reflexiones difusas, por superficies rugosas (muy costoso, realista)
+                 diffuse_reflection: bool = True, # Reflexiones difusas, por superficies rugosas (muy costoso, realista)
                  refraction: bool = True,         # Refracción (atravesar vidrios, etc. cambiar angulo y atenuar)
                  synthetic_array: bool = False,   # True: matriz sintética (rápido); False: por elemento (en false realista)
                  samples_per_src: int | None = 500_000,    # Nº de rayos por fuente (default 1,000,000)
@@ -168,12 +179,21 @@ class SionnaRT:
     # ---- Construcción ----
     def build_scene(self):
         xml_path = _resolve_scene_path(self.scene_name)
+
         if xml_path is not None:
-            scene = load_scene(xml_path, merge_shapes=True)
+            if xml_path.endswith((".glb", ".gltf", ".obj")):
+                # Escena externa (ej: Santiago)
+                scene = load_scene(xml_path, merge_shapes=True)
+            else:
+                # Escena XML estándar
+                scene = load_scene(xml_path, merge_shapes=True)
         else:
+            # Escena interna de Sionna
             scene, _ = load_builtin_scene(name=self.scene_name,
-                                          frequency_hz=self.freq_hz,
-                                          merge_shapes=True)
+                                        frequency_hz=self.freq_hz,
+                                        merge_shapes=True)
+            
+
         self.scene = scene
         self.scene.frequency = self.freq_hz
 
@@ -342,7 +362,8 @@ class SionnaRT:
                              resolution: tuple[int, int] = (900, 700),
                              with_radio_map: bool = False) -> bool:
         assert self.scene is not None, "Scene no inicializada."
-        cam = Camera(position=[0, 0, 300], look_at=[0, 0, 0])
+
+        cam = self._auto_camera()
         try:
             if with_radio_map:
                 rm_solver = RadioMapSolver()
@@ -358,4 +379,55 @@ class SionnaRT:
         except Exception as e:
             print("Error al renderizar la escena:", e)
             return False
+
+    def _auto_camera(self, z_scale: float = 1.6) -> Camera:
+        # Si la escena lo expone, usa su AABB
+        try:
+            aabb = self.scene.aabb
+            mn, mx = aabb[0], aabb[1]
+            cx = float((mn[0] + mx[0]) / 2)
+            cy = float((mn[1] + mx[1]) / 2)
+            size_xy = max(float(mx[0] - mn[0]), float(mx[1] - mn[1]))
+            z = max(150.0, size_xy * z_scale)
+            return Camera(position=[cx, cy, z], look_at=[cx, cy, 0.0])
+        except Exception:
+            # Fallback fijo
+            return Camera(position=[0, 0, 300], look_at=[0, 0, 0])
+
+
+    # ---- Métricas adicionales Calculo teorico de Pr----
+
+    # --- Distancia TX->cada RX (en metros) ---
+    def compute_tx_rx_distances(self) -> np.ndarray:
+        assert self.txs and self.rx_list, "Faltan TX y/o RX. Llama a build_scene() y attach_receivers()."
+        txp = np.array(self.txs[0].position, dtype=float)
+        rxp = np.array([list(rx.position) for rx in self.rx_list], dtype=float)
+        d = np.linalg.norm(rxp - txp, axis=1)
+        return d
+
+    # --- PRx teórico (Goldsmith 2.40): Pt_dBm + K_dB - 10*gamma*log10(d/d0) ---
+    def compute_prx_dbm_theoretical(self,
+                                    gamma: float = 2.0,
+                                    d0: float = 1.0,
+                                    Gt_dBi: float = 0.0,
+                                    Gr_dBi: float = 0.0) -> np.ndarray:
+        
+        c = 299_792_458.0
+        lam = c / float(self.freq_hz)  # λ = c/f
+
+        # K_dB = Friis @ d0 + ganancias
+        K_dB = 20.0 * np.log10(lam / (4.0 * math.pi * d0)) + Gt_dBi + Gr_dBi
+
+        Pt_dBm = self._total_tx_power_dbm()
+
+        # Distancias TX->RX
+        tx = np.array(self.txs[0].position, dtype=float)
+        rx = np.array([list(r.position) for r in self.rx_list], dtype=float)
+        d = np.linalg.norm(rx - tx, axis=1)
+
+        ratio = np.maximum(d / d0, 1e-12)  # evita log10(0)
+        prx_dbm = Pt_dBm + K_dB - 10.0 * float(gamma) * np.log10(ratio)
+
+
+        return np.asarray(prx_dbm, dtype=float).reshape(-1)
 

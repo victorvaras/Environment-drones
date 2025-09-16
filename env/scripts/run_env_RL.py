@@ -38,7 +38,7 @@ if __name__ == "__main__":
         max_steps=MAX_STEPS,
         drone_start=DRONE_START,
         rx_positions=RX_POSITIONS if RX_POSITIONS else None,
-        antenna_mode="ISO",  # "ISO" o "SECTOR3_3GPP"
+        antenna_mode="SECTOR3_3GPP",  # "ISO" o "SECTOR3_3GPP"
     )
 
     start_time = perf_counter()

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+import datetime
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
@@ -148,6 +149,7 @@ class DroneEnv(gym.Env):
     def _render_common(self):
         import matplotlib.pyplot as plt  # para plt.pause
         prx = self.rt.compute_prx_dbm()
+        prx = np.asarray(prx, dtype=float).reshape(-1) 
         rx = self.receptores.positions_xyz()
 
         if self._sc is None:
@@ -170,7 +172,7 @@ class DroneEnv(gym.Env):
         self._sc.set_array(prx)
         for t, (x, y, _), v in zip(self._texts, rx, prx):
             t.set_position((x + 1, y + 1))
-            t.set_text(f"{v:.1f} dBm")
+            t.set_text(f"{float(v):.1f} dBm")
         self._cbar.update_normal(self._sc)
 
     def _render_to_figure(self):
@@ -201,3 +203,116 @@ class DroneEnv(gym.Env):
         if self._fig is not None:
             plt.close(self._fig)
         self._fig = self._ax = self._canvas = self._cbar = None
+
+
+    def render_dual_snapshot(self,
+                            prx_left,
+                            prx_right,
+                            title_left="PRx teórico (dBm)",
+                            title_right="PRx real Sionna (dBm)",
+                            show_values_in_labels=True):
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        prx_left  = np.asarray(prx_left, dtype=float).reshape(-1)
+        prx_right = np.asarray(prx_right, dtype=float).reshape(-1)
+        rx = self.receptores.positions_xyz()
+        drone_xy = (self.dron.pos[0], self.dron.pos[1])
+        d = np.asarray(self.rt.compute_tx_rx_distances(), dtype=float).reshape(-1)
+
+        # === Banner RF (f, Pt, NF, B) ===
+        try:
+            fc_ghz = float(getattr(self.rt, "freq_hz", np.nan)) / 1e9
+        except Exception:
+            fc_ghz = np.nan
+        try:
+            pt_dbm = float(getattr(self, "tx_power_dbm", np.nan))
+            if np.isnan(pt_dbm):
+                pt_dbm = float(self.rt._total_tx_power_dbm())
+        except Exception:
+            pt_dbm = float(self.rt._total_tx_power_dbm())
+        try:
+            nf_db = float(getattr(self, "noise_figure_db", np.nan))
+        except Exception:
+            nf_db = np.nan
+        try:
+            bw_mhz = float(getattr(self, "bandwidth_hz", np.nan)) / 1e6
+        except Exception:
+            bw_mhz = np.nan
+
+        rf_str = "RF: "
+        rf_parts = []
+        rf_parts.append(f"f={fc_ghz:.3f} GHz" if not np.isnan(fc_ghz) else "f=N/A")
+        rf_parts.append(f"Pt={pt_dbm:.1f} dBm" if not np.isnan(pt_dbm) else "Pt=N/A")
+        rf_parts.append(f"NF={nf_db:.1f} dB" if not np.isnan(nf_db) else "NF=N/A")
+        rf_parts.append(f"B={bw_mhz:.1f} MHz" if not np.isnan(bw_mhz) else "B=N/A")
+        rf_str += " | ".join(rf_parts)
+
+        # Escala común para comparación justa
+        vmin = float(np.nanmin([prx_left.min(), prx_right.min()]))
+        vmax = float(np.nanmax([prx_left.max(), prx_right.max()]))
+
+        # Figura 1x3: izq (teo), centro (tabla abajo), der (real)
+        fig = plt.figure(figsize=(15, 6), dpi=110)
+        gs = fig.add_gridspec(1, 3, width_ratios=[1.0, 0.8, 1.0], wspace=0.15)
+        axL = fig.add_subplot(gs[0, 0])
+        axC = fig.add_subplot(gs[0, 1])
+        axR = fig.add_subplot(gs[0, 2])
+
+        # --- Panel izquierdo: Teórico ---
+        scL = axL.scatter(rx[:,0], rx[:,1], c=prx_left, s=80, cmap="viridis", vmin=vmin, vmax=vmax)
+        axL.scatter([drone_xy[0]], [drone_xy[1]], marker="^", s=150, edgecolors="k", facecolors="none", label="Dron")
+        for i, (x, y, _) in enumerate(rx):
+            label = f"Rx{i}" if not show_values_in_labels else f"Rx{i}\n{prx_left[i]:.1f} dBm"
+            axL.text(x + 1, y + 1, label, fontsize=8, weight="bold")
+        axL.set_aspect("equal", adjustable="box")
+        axL.set_title(title_left)
+        # Banner RF debajo del título
+        axL.text(0.5, 1.3, rf_str, transform=axL.transAxes, ha="center", va="bottom", fontsize=9)
+        axL.set_xlabel("x [m]"); axL.set_ylabel("y [m]")
+        axL.grid(True, alpha=0.3)
+        fig.colorbar(scL, ax=axL, label="dBm")
+        axL.legend(loc="upper right")
+
+        # --- Panel central: “tabla” abajo (distancia + PRx teo/real) ---
+        axC.axis("off")
+        lines = [
+            f"Rx{i:02d}  d={d[i]:6.2f} m   Teo={prx_left[i]:7.2f} dBm   Real={prx_right[i]:7.2f} dBm"
+            for i in range(len(d))
+        ]
+        # título arriba para el panel central
+        axC.set_title("Distancia y PRx por receptor", y=0.98)
+        # texto anclado ABAJO al centro
+        axC.text(0.5, 0.02, "\n".join(lines), ha="center", va="bottom",
+                transform=axC.transAxes, family="monospace", fontsize=10)
+
+        # --- Panel derecho: Real (Sionna RT) ---
+        scR = axR.scatter(rx[:,0], rx[:,1], c=prx_right, s=80, cmap="viridis", vmin=vmin, vmax=vmax)
+        axR.scatter([drone_xy[0]], [drone_xy[1]], marker="^", s=150, edgecolors="k", facecolors="none", label="Dron")
+        for i, (x, y, _) in enumerate(rx):
+            label = f"Rx{i}" if not show_values_in_labels else f"Rx{i}\n{prx_right[i]:.1f} dBm"
+            axR.text(x + 1, y + 1, label, fontsize=8, weight="bold")
+        axR.set_aspect("equal", adjustable="box")
+        axR.set_title(title_right)
+        # Banner RF debajo del título
+        axR.text(0.5, 1.3, rf_str, transform=axR.transAxes, ha="center", va="bottom", fontsize=9)
+        axR.set_xlabel("x [m]"); axR.set_ylabel("y [m]")
+        axR.grid(True, alpha=0.3)
+        fig.colorbar(scR, ax=axR, label="dBm")
+        axR.legend(loc="upper right")
+
+        # === Guardado automático ===
+        # Carpeta con el nombre que pediste
+        out_dir = Path("Environment drones/comparacion PRx teorico real")
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Nombre termina en _<frecuencia>
+        freq_suffix = f"{fc_ghz:.3f}GHz" if not np.isnan(fc_ghz) else "NA"
+
+        filename = f"comparacion_prx_teo_real_{freq_suffix}.png"
+
+        fig.savefig(out_dir / filename, dpi=150, bbox_inches="tight")
+
+        plt.show()
+
+

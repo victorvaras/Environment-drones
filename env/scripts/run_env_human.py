@@ -18,7 +18,8 @@ from env.environment.gymnasium_env import DroneEnv  # <- usa tu archivo renombra
 
 
 # === Configuración del escenario (edita aquí) ===
-SCENE = "simple_street_canyon_with_cars"  # municg - san_francisco - simple_street_canyon - simple_street_canyon_with_cars
+
+SCENE = "simple_street_canyon_with_cars"  # santiago.xml municg - san_francisco - simple_street_canyon - simple_street_canyon_with_cars
 DRONE_START = (0.0, 0.0, 20.0)    # (x, y, z) en metros
 RX_POSITIONS = [
     (-50.0, 0.0, 1.5),
@@ -28,8 +29,20 @@ RX_POSITIONS = [
     (  50.0,    0.0, 1.5),
     (90, -55, 1.5),
 ]
+MAX_STEPS = 10
+"""
+SCENE = "santiago.xml"  # santiago.xml municg - san_francisco - simple_street_canyon - simple_street_canyon_with_cars
+DRONE_START = (0.0, 0.0, 150.0)    # (x, y, z) en metros
+RX_POSITIONS = [
+    (-50.0, 0.0, 1.5),
+    (-10.0,   260.0, 1.5),
+    ( 60.0,  -30.0, 1.5),
+    (50.0,   -160.0, 1.5),
+    (  -345.0,    -272.0, 1.5),
+    (277, 265, 1.5),
+]
 MAX_STEPS = 100
-
+"""
 
 if __name__ == "__main__":
     start_time = time.perf_counter()
