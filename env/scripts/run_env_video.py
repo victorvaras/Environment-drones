@@ -44,13 +44,13 @@ if __name__ == "__main__":
         rx_positions=RX_POSITIONS if RX_POSITIONS else None,
         antenna_mode="ISO",  # "ISO" o "SECTOR3_3GPP"
     )
-    env = RecordVideo(env, str(OUTDIR), name_prefix="drone_rt-1")
+    env = RecordVideo(env, str(OUTDIR), name_prefix="metricas_avanzadas-1")
 
     obs, info = env.reset(seed=0)
     done, trunc = False, False
     while not (done or trunc):
-        a = np.random.uniform(-2, 2, size=(3,))    #Movimiento aleatorio
-        #a = [0,0,0]     #Movimiento estatico
+        #a = np.random.uniform(-2, 2, size=(3,))    #Movimiento aleatorio
+        a = [0.1,0,0]     #Movimiento estatico
         obs, rew, done, trunc, info = env.step(a)
 
 
