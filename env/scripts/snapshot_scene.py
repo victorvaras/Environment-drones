@@ -7,7 +7,7 @@ project_root = Path(__file__).resolve().parents[2]
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from env.environment.sionna import SionnaRT
+from env.environment.sionnaEnv import SionnaRT
 
 RX_POSITIONS = [
     (-50.0, 0.0, 1.5),
@@ -28,7 +28,7 @@ if __name__ == "__main__":
     rt.attach_receivers(np.array(RX_POSITIONS, dtype=float))
 
     # Mapa de calor de cobertura:
-    rt.render_scene_to_file(filename="simple_street_canyon_with_cars_receptores.png", with_radio_map=True)
+    rt.render_scene_to_file(filename="simple_street_canyon_with_cars_3gpp.png", with_radio_map=True)
 """
 
 if __name__ == "__main__":

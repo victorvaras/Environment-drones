@@ -5,4 +5,4 @@ Ver cuantos rayos se estan trasando en este punto y cuantos se pueden hacer
 Escenario ideal seria usar 3 antenas en 120grados c/u para dirigir la emision de señal desde el DroneEnv
 
 
-El movimiento del dron tiene que ser representado con inclinaciones inclusive al desplazarse (como ni vergas)
+El movimiento del dron tiene que ser representado con inclinaciones inclusive al desplazarse

@@ -27,7 +27,7 @@ RX_POSITIONS = [
 ANTENNA_MODE = "ISO"
 
 # RF
-FREQ_MHZ     = 3_500 #28_000.0     # Frecuencia en MHz de transmisor
+FREQ_MHZ     = 39999 #28_000.0     # Frecuencia en MHz de transmisor
 TX_POWER_DBM = 30.0               # Potencia de transmisión en dBm
 NOISE_FIG_DB = 7.0                # Figura de ruido en dB
 B_HZ         = 20e6               # Ancho de banda en Hz
