@@ -28,7 +28,7 @@ if __name__ == "__main__":
     rt.attach_receivers(np.array(RX_POSITIONS, dtype=float))
 
     # Mapa de calor de cobertura:
-    rt.render_scene_to_file(filename="simple_street_canyon_with_cars_receptores.png", with_radio_map=True)
+    rt.render_scene_to_file(filename="simple_street_canyon_with_cars_3gpp.png", with_radio_map=True)
 """
 
 if __name__ == "__main__":

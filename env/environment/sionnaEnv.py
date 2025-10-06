@@ -2,6 +2,7 @@ from __future__ import annotations
 import math
 import numpy as np
 from pathlib import Path
+import math
 
 from sionna.rt import (
     Scene,
@@ -19,7 +20,19 @@ from sionna.sys import PHYAbstraction, OuterLoopLinkAdaptation, PFSchedulerSUMIM
 from sionna.phy.nr.utils import decode_mcs_index
 from sionna.phy.utils import log2, dbm_to_watt, lin_to_db
 from sionna.phy.constants import BOLTZMANN_CONSTANT
+
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # 2=WARNING mínimo, 3=ERROR
+
 import tensorflow as tf
+import logging
+tf.get_logger().setLevel(logging.ERROR)
+try:
+    import absl.logging
+    absl.logging.set_verbosity('error')
+except Exception:
+    pass
+
 import numpy as np
 
 from sionna.phy.ofdm import ResourceGrid, RZFPrecodedChannel, LMMSEPostEqualizationSINR
@@ -91,38 +104,6 @@ def load_builtin_scene(name: str = "munich",
     return scene, solver
 
 
-# === Ruta A: utilidades PRB / ruido / SINR / goodput ===
-#Funciones auxiliares para calculo de goodput
-
-def _lin(db: float) -> float:
-    return 10.0 ** (db / 10.0)
-
-def _db(x: float) -> float:
-    return 10.0 * math.log10(max(x, 1e-30))
-
-def _prb_bandwidth_hz(scs_khz: float) -> float:
-    """1 PRB = 12 subportadoras; BW = 12 * SCS."""
-    return 12.0 * scs_khz * 1e3
-
-def _noise_power_dbm_in_bw(bw_hz: float, noise_figure_db: float) -> float:
-    """Potencia de ruido (dBm) en un ancho de banda 'bw_hz'."""
-    return -174.0 + 10.0 * math.log10(bw_hz) + float(noise_figure_db)
-
-def _goodput_routeA_bits(
-    sinr_db: float,
-    n_prb: int,
-    scs_khz: float,
-    dt_seconds: float,
-    zeta: float = 0.85,
-    overhead: float = 0.20,
-    bler_target: float = 0.10,
-) -> float:
-    """Bits correctos en la ventana dt_seconds (Ruta A simple)."""
-    eta = zeta * math.log2(1.0 + _lin(sinr_db)) * (1.0 - overhead)   # bit/s/Hz
-    B_alloc = n_prb * _prb_bandwidth_hz(scs_khz)                      # Hz
-    bits_tx = eta * B_alloc * dt_seconds
-    return max((1.0 - bler_target) * bits_tx, 0.0)
-
 
 
 
@@ -142,9 +123,9 @@ class SionnaRT:
 
                  # --- RF / ruido ---
                  frequency_mhz: float = 3500.0,   # Frecuencia portadora [MHz]
-                 tx_power_dbm: float = 30.0,      # Potencia TOTAL objetivo [dBm] (se reparte si hay sectores)
-                 noise_figure_db: float = 7.0,    # NF del receptor [dB]
-                 bandwidth_hz: float = 20e6,      # Ancho de banda de ruido térmico [Hz]
+                 tx_power_dbm: float = 40.0,      # Potencia TOTAL objetivo [dBm] (se reparte si hay sectores)
+                 
+                 bandwidth_hz: float = 18_000_000,      # Ancho de banda de ruido térmico [Hz]
 
                  # --- escena: nombre integrado o ruta a XML/carpeta ---
                  scene_name: str = "munich",
@@ -184,14 +165,13 @@ class SionnaRT:
 
                 # --- parametros SYS
                 num_ut: int = 6,                # número de usuarios/receptores
-                num_subcarriers: int = 256,     # número de subportadoras
-                num_ofdm_symbols: int = 24,     # número de símbolos OFDM
+                num_subcarriers: int = 128,     # número de subportadoras
+                num_ofdm_symbols: int = 12,     # número de símbolos OFDM
                 bler_target: float = 0.1,       # objetivo de BLER para el enlace
                 mcs_table_index: int = 1,       # índice de la tabla MCS a utilizar
                 num_ut_ant: int = 1,            # número de antenas por usuario
                 num_bs: int = 1,                # número de estaciones base                
                 subcarrier_spacing: float = 30e3,
-                **kwargs
                ):
 
         # --- Modo ---
@@ -199,13 +179,14 @@ class SionnaRT:
 
         # --- RF / ruido ---
         self.freq_hz = frequency_mhz * 1e6
-        self.tx_power_dbm_total = tx_power_dbm     # guardamos la potencia total
-        self.noise_figure_db = noise_figure_db
+        self.tx_power_dbm_total = tx_power_dbm     
         self.bandwidth_hz = bandwidth_hz
 
         # --- escena / antenas ---
         self.scene_name = scene_name
 
+
+        # --- configuracion antenas TX ---
         self.tx_array_rows = tx_array_rows
         self.tx_array_cols = tx_array_cols
         self.tx_array_v_spacing = tx_array_v_spacing
@@ -213,6 +194,7 @@ class SionnaRT:
         self.tx_array_pattern = tx_array_pattern
         self.tx_array_polarization = tx_array_polarization
 
+        # --- configuracion receptores RX ---
         self.rx_array_rows = rx_array_rows
         self.rx_array_cols = rx_array_cols
         self.rx_array_v_spacing = rx_array_v_spacing
@@ -220,6 +202,7 @@ class SionnaRT:
         self.rx_array_pattern = rx_array_pattern
         self.rx_array_polarization = rx_array_polarization
 
+        # --- pose inicial del transmisor ---
         self.tx_initial_position = tx_initial_position
         self.tx_orientation_deg = tx_orientation_deg  # yaw, pitch, roll en grados
 
@@ -251,6 +234,9 @@ class SionnaRT:
         self.mcs_table_index = mcs_table_index
         self.num_ut_ant = num_ut_ant
         self.num_bs = num_bs
+        self.subcarrier_spacing = subcarrier_spacing
+
+
 
         # PHY Abstraction
         self.phy_abs = PHYAbstraction()
@@ -270,13 +256,10 @@ class SionnaRT:
             num_ofdm_sym=self.num_ofdm_symbols,
             batch_size=[self.num_bs],
             num_streams_per_ut=self.num_ut_ant,
-            beta=0.01
+            beta=0.9
         )
 
-        self.num_ofdm_symbols = num_ofdm_symbols
-        self.num_subcarriers = num_subcarriers
-        self.subcarrier_spacing = subcarrier_spacing
-
+        
         # Crear ResourceGrid para usar después
         self.resource_grid = ResourceGrid(
             num_ofdm_symbols=self.num_ofdm_symbols,
@@ -303,9 +286,6 @@ class SionnaRT:
         self.harq_feedback = -tf.ones([self.num_bs, self.num_ut], dtype=tf.int32)
         self.sinr_eff_feedback = tf.zeros([self.num_bs, self.num_ut], dtype=tf.float32)
         self.num_decoded_bits = tf.zeros([self.num_bs, self.num_ut], dtype=tf.int32)
-        self.subcarrier_spacing = subcarrier_spacing
-        self.num_subcarriers = num_subcarriers  # cantidad de subcanales OFDM (ejemplo 128)
-        self.num_ofdm_symbols = num_ofdm_symbols  # cantidad de símbolos OFDM (ejemplo 12)
 
     # ---- Construcción ----
     def build_scene(self):
@@ -366,37 +346,72 @@ class SionnaRT:
         assert self.scene is not None and self._solver is not None and self.tx is not None, \
             "Sionna RT no quedó inicializado correctamente."
 
+
+
     def _create_transmitters(self):
-        """Crea 1 TX (ISO) o 3 TX sectoriales (SECTOR3_3GPP) y los añade a la escena."""
+        """
+        Crea SIEMPRE 1 TX y lo añade a la escena.
+        - Modo ISO: patrón isotrópico (ya seteado en scene.tx_array), orientación base.
+        - Modo 3GPP/SECTOR3/SECTOR3_3GPP: patrón 3GPP TR 38.901 (ya seteado en scene.tx_array),
+        usa un downtilt (pitch negativo) para 'apuntar hacia abajo'.
+        Efectos colaterales:
+            self.txs = [tx]
+            self.tx  = tx
+        """
+        # Limpia lista local (si re-llamas esta función no duplicas referencias)
         self.txs = []
 
-        if self.antenna_mode == "ISO":
-            tx = Transmitter(name="tx0",
-                             position=list(self.tx_initial_position),
-                             display_radius=2)
-            tx.orientation = list(self.tx_orientation_deg)  # [yaw, pitch, roll] en grados
-            tx.power_dbm = float(self.tx_power_dbm_total)   # toda la potencia
-            self.scene.add(tx)
-            self.txs.append(tx)
-            self.tx = tx  # compat
+        # Helpers
+        def _norm_deg(a: float) -> float:
+            x = float(a) % 360.0
+            return x if x >= 0.0 else x + 360.0
 
-        elif self.antenna_mode in ("SECTOR3_3GPP", "SECTOR3", "3GPP"):
-            # Reparto de potencia total en 3 sectores
-            p_per_dbm = float(self.tx_power_dbm_total) - 10.0 * math.log10(3.0)
+        # Orientación base [yaw, pitch, roll]
+        try:
             base_yaw, base_pitch, base_roll = self.tx_orientation_deg
-            sector_yaws = (0.0, 120.0, 240.0)  # 3 sectores a 120°
-            for i, yaw_add in enumerate(sector_yaws):
-                tx = Transmitter(name=f"tx{i}",
-                                 position=list(self.tx_initial_position),
-                                 display_radius=2)
-                tx.orientation = [base_yaw + yaw_add, base_pitch, base_roll]
-                tx.power_dbm = p_per_dbm
-                self.scene.add(tx)
-                self.txs.append(tx)
-            self.tx = self.txs[0]  # compat
+        except Exception as e:
+            raise ValueError("tx_orientation_deg debe ser [yaw, pitch, roll] en grados") from e
+
+        # Si no definiste un downtilt, usamos -10° (negativo = inclinar hacia el suelo)
+        # ajusta a tu convención si tu motor usa el signo inverso.
+        tx_downtilt_deg = getattr(self, "tx_downtilt_deg", -10.0)
+
+        # Crea el único TX
+        tx = Transmitter(
+            name="tx0",
+            position=list(self.tx_initial_position),
+            display_radius=2
+        )
+
+        mode = str(self.antenna_mode).upper().strip()
+
+        if mode == "ISO":
+            # Un solo TX, toda la potencia, orientación base
+            tx.orientation = [_norm_deg(base_yaw), float(base_pitch), float(base_roll)]
+            tx.power_dbm = float(self.tx_power_dbm_total)
+
+        elif mode in ("SECTOR3_3GPP", "SECTOR3", "3GPP"):
+            # Un solo TX, patrón 3GPP ya viene dado por scene.tx_array en build_scene.
+            # Usamos downtilt (pitch negativo) para 'apuntar hacia abajo'.
+            # Nota: si tu convención es opuesta, cambia a +abs(tx_downtilt_deg).
+            pitch = float(base_pitch) + float(tx_downtilt_deg)  # típico: base 0 + (-10) = -10°
+            tx.orientation = [_norm_deg(base_yaw), pitch, float(base_roll)]
+            tx.power_dbm = float(self.tx_power_dbm_total)  # sin reparto, 1 solo sector físico
+
+            # (Opcional) si quieres permitir un azimut distinto para el lóbulo principal:
+            # desired_azimuth = getattr(self, "tx_azimuth_deg", base_yaw)
+            # tx.orientation[0] = _norm_deg(desired_azimuth)
 
         else:
             raise ValueError(f"antenna_mode inválido: {self.antenna_mode}")
+
+        # Añade a escena y guarda referencias
+        self.scene.add(tx)
+        self.txs.append(tx)
+        self.tx = tx  # compat
+
+
+
 
     def attach_receivers(self, rx_positions_xyz: np.ndarray):
         assert self.scene is not None, "build_scene() no fue llamado."
@@ -477,9 +492,7 @@ class SionnaRT:
         prx_dbm = ptx_dbm_total + 10.0 * np.log10(power_lin)
         return prx_dbm.astype(float)
 
-    def compute_snr_db(self, prx_dbm: np.ndarray) -> np.ndarray:
-        noise_dbm = -174.0 + 10.0 * math.log10(self.bandwidth_hz) + self.noise_figure_db
-        return prx_dbm - noise_dbm
+
 
     # ---- Visualización opcional ----
     def preview_scene(self):
@@ -524,121 +537,86 @@ class SionnaRT:
         except Exception:
             # Fallback fijo
             return Camera(position=[0, 0, 300], look_at=[0, 0, 0])
-
-
-    # ---- Métricas adicionales Calculo teorico de Pr----
-
-    # --- Distancia TX->cada RX (en metros) ---
-    def compute_tx_rx_distances(self) -> np.ndarray:
-        assert self.txs and self.rx_list, "Faltan TX y/o RX. Llama a build_scene() y attach_receivers()."
-        txp = np.array(self.txs[0].position, dtype=float)
-        rxp = np.array([list(rx.position) for rx in self.rx_list], dtype=float)
-        d = np.linalg.norm(rxp - txp, axis=1)
-        return d
-
-    # --- PRx teórico (Goldsmith 2.40): Pt_dBm + K_dB - 10*gamma*log10(d/d0) ---
-    def compute_prx_dbm_theoretical(self,
-                                    gamma: float = 2.0,
-                                    d0: float = 1.0,
-                                    Gt_dBi: float = 0.0,
-                                    Gr_dBi: float = 0.0) -> np.ndarray:
         
-        c = 299_792_458.0
-        lam = c / float(self.freq_hz)  # λ = c/f
 
-        # K_dB = Friis @ d0 + ganancias
-        K_dB = 20.0 * np.log10(lam / (4.0 * math.pi * d0)) + Gt_dBi + Gr_dBi
-
-        Pt_dBm = self._total_tx_power_dbm()
-
-        # Distancias TX->RX
-        tx = np.array(self.txs[0].position, dtype=float)
-        rx = np.array([list(r.position) for r in self.rx_list], dtype=float)
-        d = np.linalg.norm(rx - tx, axis=1)
-
-        ratio = np.maximum(d / d0, 1e-12)  # evita log10(0)
-        prx_dbm = Pt_dBm + K_dB - 10.0 * float(gamma) * np.log10(ratio)
-
-
-        return np.asarray(prx_dbm, dtype=float).reshape(-1)
     
 
-    def estimate_ue_sinr_db_routeA(
-        self,
-        ue_index: int,
-        scs_khz: float = 30.0,
-        interference_dbm: float | None = None,
-        ) -> float:
-        """
-        SINR efectivo por PRB para 'ue_index' usando Ruta A (simple).
-        NOTA: tu compute_prx_dbm() devuelve PRx TOTAL en la banda 'self.bandwidth_hz'.
-        Para un PRB, asumimos espectro plano y escalamos: S_PRB = S_total * (B_PRB / B_total).
-        """
-        prx_total_dbm = float(self.compute_prx_dbm()[ue_index])
-
-        # Escala de potencia a 1 PRB asumiendo PSD plana:
-        B_total = float(self.bandwidth_hz)
-        B_prb = _prb_bandwidth_hz(scs_khz)
-        # Potencia por PRB en dBm: P_total + 10*log10(B_prb/B_total)
-        s_prb_dbm = prx_total_dbm + 10.0 * math.log10(max(B_prb / max(B_total, 1e-30), 1e-30))
-
-        # Ruido térmico en 1 PRB + NF
-        n_prb_dbm = _noise_power_dbm_in_bw(B_prb, self.noise_figure_db)
-
-        if interference_dbm is None:
-            # SINR dB ≈ S_prb(dBm) - N_prb(dBm)
-            return s_prb_dbm - n_prb_dbm
-
-        # Con interferencia: trabajar en lineal (mW)
-        s_mw = _lin(s_prb_dbm)
-        n_mw = _lin(n_prb_dbm)
-        i_mw = _lin(interference_dbm)
-        sinr_lin = s_mw / (n_mw + i_mw + 1e-30)
-        return _db(sinr_lin)
     
+    @staticmethod
+    def _tf_db10(x):
+        x = tf.cast(x, tf.float32)
+        return 10.0 * tf.math.log(x) / tf.math.log(tf.constant(10.0, tf.float32))
+
+    @staticmethod
+    def _w_to_dbm(x):
+        x = tf.cast(x, tf.float32)
+        return 10.0 * tf.math.log(x) / tf.math.log(tf.constant(10.0, tf.float32)) + 30.0
+
+    def _tflog(self, *args):
+        # Si ya definiste self.debug_log en __init__, usamos archivo; si no, va a stderr
+        stream = "file://" + getattr(self, "debug_log", "")
+        if not getattr(self, "debug_log", None):
+            stream = "stderr"
+        tf.print(*args, output_stream=stream)
+
 
 
 
     # --- Calculo de SYS
-    @tf.function#(jit_compile=True)
+    @tf.function  # (jit_compile=True)
     def sys_step(self, h, harq_feedback, sinr_eff_feedback, num_decoded_bits):
         """
         Ejecuta un step del sistema usando Sionna SYS.
         Calcula y devuelve métricas de bloques por step y acumuladas.
         """
-        # --- Ruido (potencia por subportadora) ---
-        no = BOLTZMANN_CONSTANT * 294 * self.bandwidth_hz
+        # --- Ruido (potencia de ruido según BW efectiva) ---
+        # --- Ruido por subportadora en dBm (FIJO razonable) ---
+        no_dbm_sc = tf.constant(-129.0, tf.float32)            # 30 kHz típico
+        no = tf.pow(10.0, no_dbm_sc/10.0) / 1e3                # -> Watts por subportadora
+        EPS_NO = tf.constant(1e-18, tf.float32)
+        no = tf.maximum(no, EPS_NO)
+
+
 
         # --- Ganancia de canal y tasa Shannon estimada (para scheduler PF) ---
-        channel_gain = tf.math.square(tf.abs(h))  # |H|^2
-        rate_achievable_est = log2(1.0 + channel_gain / no)
-        # reduce antenas y tiempo-ofdm (coincide con tu versión)
-        rate_achievable_est = tf.reduce_mean(rate_achievable_est, axis=[-3, -5])
-        # -> [num_bs, num_ofdm_symbols, num_subcarriers, num_ut]
-        rate_achievable_est = tf.transpose(rate_achievable_est, [1, 2, 3, 0])
+        # h: [num_ut, num_ut_ant, num_bs, num_bs_ant, T, F]
+        channel_gain = tf.maximum(tf.math.square(tf.abs(h)), 1e-12)   
+
+        # log2(1 + SNR) por RE/antena
+        rate = log2(1.0 + channel_gain / no)  # [ut, ut_ant, bs, bs_ant, T, F]
+
+        # Promedio sobre antenas de UT y BS (¡solo antenas!)
+        rate = tf.reduce_mean(rate, axis=[1, 3])  # -> [num_ut, num_bs, T, F]
+
+        # Reordenar a lo que espera el scheduler
+        rate_achievable_est = tf.transpose(rate, [1, 2, 3, 0])  # -> [num_bs, T, F, num_ut]
+
 
         # --- Scheduler (PF) ---
         # is_scheduled: [num_bs, num_ofdm_symbols, num_subcarriers, num_ut, num_streams_per_ut]
         is_scheduled = self.scheduler(num_decoded_bits, rate_achievable_est)
-        # ut por RE
-        ut_scheduled = tf.argmax(tf.reduce_sum(tf.cast(is_scheduled, tf.int32), axis=-1), axis=-1)
+
         # REs asignados por BS y UT: [num_bs, num_ut]
-        num_allocated_re = tf.reduce_sum(tf.cast(is_scheduled, tf.int32), axis=[-4, -3, -1])
+        num_allocated_re = tf.reduce_sum(tf.cast(is_scheduled, tf.int32), axis=[ 1, 2, 4])
 
         # --- Pathloss medio por UT (heurístico) ---
         pathloss_per_ut = tf.reduce_mean(1.0 / channel_gain, axis=[1, 3, 4, 5])  # [num_ut, num_bs]
         pathloss_per_ut = tf.transpose(pathloss_per_ut, [1, 0])                  # [num_bs, num_ut]
 
-        # --- Control de potencia DL (fairness=0 => suma de throughput) ---
+        pathloss_per_ut = tf.where(tf.math.is_finite(pathloss_per_ut),
+                           pathloss_per_ut,
+                           tf.reduce_max(pathloss_per_ut[tf.math.is_finite(pathloss_per_ut)]) )
+
+
+        # --- Control de potencia DL ---
         tx_power_per_ut, _ = downlink_fair_power_control(
             pathloss_per_ut, no, num_allocated_re,
             bs_max_power_dbm=self.tx_power_dbm_total,
             guaranteed_power_ratio=0.5,
             fairness=0
         )
-
-        # (Opcional) REs por usuario sumados en ejes OFDM (no usado en bloques)
-        num_re_per_user = tf.reduce_sum(tf.cast(is_scheduled, tf.int32), axis=[0, 1, 2])
+        tx_power_per_ut = tf.nn.relu(tx_power_per_ut)  # no negativos
+        
 
         # --- Reparto de potencia en REs asignados ---
         tx_power = spread_across_subcarriers(
@@ -647,12 +625,16 @@ class SionnaRT:
             num_tx=self.num_bs
         )
 
-        # --- Precoding + SINR post-ecualización ---
-        precoded_channel = self.precoded_channel
-        lmmse_posteq_sinr = self.lmmse_posteq_sinr
+       
+        # Precoding con regularización más alta (evita mal acondicionamiento)
+        h_eff = self.precoded_channel(h[tf.newaxis, ...],
+                                    tx_power=tx_power,
+                                    alpha=no*20.0 + EPS_NO)
 
-        h_eff = precoded_channel(h[tf.newaxis, ...], tx_power=tx_power, alpha=no)
-        sinr = lmmse_posteq_sinr(h_eff, no=no, interference_whitening=True)
+        # SINR sin whitening (evita Cholesky)
+        sinr = self.lmmse_posteq_sinr(h_eff, no=no + EPS_NO, interference_whitening=False)
+
+
         # sinr: [num_bs, num_ofdm_symbols, num_subcarriers, num_ut, num_streams_per_ut]
 
         # --- Link Adaptation (OLLA) ---
@@ -664,12 +646,21 @@ class SionnaRT:
             harq_feedback=harq_feedback
         )
 
-        # --- Abstracción PHY: bits decodados, HARQ, SINR efectivo ---
+        # --- Abstracción PHY: bits decodados, HARQ, SINR efectivo real ---
         num_decoded_bits, harq_feedback, sinr_eff_true, *_ = self.phy_abs(
             mcs_index, sinr=sinr, mcs_table_index=self.mcs_table_index, mcs_category=1
         )
 
-        sinr_eff_db_true = lin_to_db(sinr_eff_true)
+        # === BLOQUE NUEVO: HARQ masked al estilo tutorial (unscheduled=-1) ===
+        # num_allocated_re: [num_bs, num_ut]
+        harq_feedback_masked = tf.where(
+            num_allocated_re > 0,                 # programado en este step
+            harq_feedback,                        # 1=ACK / 0=NACK
+            -tf.ones_like(harq_feedback)          # -1 si NO fue agendado (tutorial)
+        )  # -> [num_bs, num_ut]
+
+
+        sinr_eff_db_true = lin_to_db(sinr_eff_true)  # Effective SINR
         # feedback para OLLA en el próximo step (0 si no fue agendado)
         sinr_eff_feedback = tf.where(num_allocated_re > 0, sinr_eff_true, 0)
 
@@ -677,74 +668,103 @@ class SionnaRT:
         mod_order, coderate = decode_mcs_index(
             mcs_index, table_index=self.mcs_table_index, is_pusch=False
         )
-        se_la = tf.where(harq_feedback == 1,
-                        tf.cast(mod_order, coderate.dtype) * coderate,
-                        tf.cast(0, tf.float32))
-        se_shannon = log2(1 + sinr_eff_true)
 
-        pf_metric = self.scheduler.pf_metric
-
-        # --- BLER por usuario (1 - HARQ_OK) ---
-        harq_01 = tf.clip_by_value(tf.cast(harq_feedback, tf.int32), 0, 1)  # [num_bs, num_ut]
-        bler_per_user = 1.0 - tf.cast(harq_01, tf.float32)                  # [num_bs, num_ut]
-
-        # --- Goodput “en bits” por usuario (bits ok) ---
-        goodput_per_user = tf.cast(num_decoded_bits, tf.float32) * (1.0 - bler_per_user)
-
-        # ============================================================
-        # === NUEVO: Bloques por step y acumulados (por UE y total) ==
-        # ============================================================
-        # Intento (TX) si el UE tuvo algún RE asignado en el step
-        # Shapes: num_allocated_re / harq_feedback / num_decoded_bits: [num_bs, num_ut]
-        
-        num_allocated_re_bs0 = num_allocated_re[0, :]                 # [num_ut], int32
-        blocks_tx_step_per_ue = tf.cast(num_allocated_re_bs0 > 0, tf.int32)   # 0/1
-
-        # Éxito: HARQ == 1 (clip explícito a {0,1}); si no hubo TX, debe quedar 0
-        harq_ok_bs0 = tf.cast(tf.equal(harq_feedback[0, :], 1), tf.int32)      # 0/1 (NACK/ACK)
-        blocks_ok_step_per_ue = blocks_tx_step_per_ue * harq_ok_bs0            # 0/1
-
-        # % éxito por UE en el step
-        success_rate_step_per_ue = tf.where(
-            blocks_tx_step_per_ue > 0,
-            tf.cast(blocks_ok_step_per_ue, tf.float32) / tf.cast(blocks_tx_step_per_ue, tf.float32),
-            tf.zeros_like(tf.cast(blocks_ok_step_per_ue, tf.float32))
+        # SE simulada por link adaptation (solo si ACK)
+        se_la = tf.where(
+            harq_feedback == 1,
+            tf.cast(mod_order, coderate.dtype) * coderate,
+            tf.cast(0, tf.float32)
         )
+        se_shannon = log2(1.0 + sinr_eff_true)  # Cota superior de SE
 
-        # Totales del step
-        blocks_tx_step_total = tf.reduce_sum(blocks_tx_step_per_ue)  # escalar
-        blocks_ok_step_total = tf.reduce_sum(blocks_ok_step_per_ue)  # escalar
-        success_rate_step_total = tf.where(
-            blocks_tx_step_total > 0,
-            tf.cast(blocks_ok_step_total, tf.float32) / tf.cast(blocks_tx_step_total, tf.float32),
-            tf.constant(0.0, dtype=tf.float32)
-        )
+
+        # --- TBLER por usuario (Transport Block) ------------------------------
+      
+      
+        # Indicador de TB “real” según HARQ (tutorial-style)
+        tb_tx_step_per_ue = tf.cast(tf.not_equal(harq_feedback[0, :], -1), tf.int32)  # 1 si hubo intento de TB
+
+        # Éxito del TB (ACK) entre los que sí transmitieron
+        tb_ok_step_per_ue = tf.cast(tf.equal(harq_feedback[0, :], 1), tf.int32) * tb_tx_step_per_ue
+
+        # TBLER step: 0 (ACK), 1 (NACK), NaN (no transmitió)
+        tbler_step_per_ue = tf.where(
+            tb_tx_step_per_ue > 0,
+            1.0 - tf.cast(tb_ok_step_per_ue, tf.float32),
+            tf.constant(float('nan'), dtype=tf.float32)
+)
+
+
+
+        # Media del step SOLO sobre UEs que transmitieron (ignora NaN)
+        tbler_step_per_ue = tbler_step_per_ue[tf.newaxis, :]  # shape [1, num_ut] para coherencia de salida
+
+
+        # --- Contadores de bloques para acumulados ----------------------------
+        # Permiten TBLER acumulada = 1 - blocks_ok_accum / blocks_tx_accum
+        blocks_tx_step_per_ue = tb_tx_step_per_ue
+        blocks_ok_step_per_ue = tb_ok_step_per_ue
 
         step_blocks = {
             "blocks_tx_step_per_ue": blocks_tx_step_per_ue,
             "blocks_ok_step_per_ue": blocks_ok_step_per_ue,
-            "success_rate_step_per_ue": success_rate_step_per_ue,
-            "blocks_tx_step_total": blocks_tx_step_total,
-            "blocks_ok_step_total": blocks_ok_step_total,
-            "success_rate_step_total": success_rate_step_total,
+            
         }
 
-        return (harq_feedback, sinr_eff_feedback, num_decoded_bits, mcs_index,
-                se_la, se_shannon, sinr_eff_db_true, pf_metric, ut_scheduled,
-                bler_per_user, goodput_per_user, num_re_per_user,
-                step_blocks)  # <<--- NUEVO
 
 
-    def get_current_channel_tensor(self):
+
         """
-        Transforma el CFR guardado a tensor tf para SYS.
+        # ===== DEBUG: tf.print métricas clave (siempre) =====
+        no_dbm = self._w_to_dbm(no)  # dBm por subportadora
+
+        bs0 = 0
+
+        # Protecciones de índice por si bs0 >= num_bs (no debería)
+        num_bs_tf = tf.shape(num_allocated_re)[0]
+        bs0 = tf.minimum(bs0, num_bs_tf - 1)
+
+        tf.print("\n=== [SYS DEBUG] ===")
+        tf.print("Δf [Hz]            :", tf.constant(float(self.subcarrier_spacing), dtype=tf.float32))
+        tf.print("no [W/sc], [dBm/sc]:", no, ",", no_dbm)
+
+        tf.print("REs asignados [BS0]:", num_allocated_re[bs0, :])
+
+        tf.print("Tx power/UE [BS0] W:", tx_power_per_ut[bs0, :],
+                " | sum W:", tf.reduce_sum(tx_power_per_ut[bs0, :]))
+
+        tf.print("MCS index [BS0]    :", mcs_index[bs0, :])
+
+        # sinr_eff_db_true: [num_bs, num_ut] (tras phy_abs)
+        mean_sinr = tf.reduce_mean(sinr_eff_db_true[bs0, :])
+        min_sinr  = tf.reduce_min(sinr_eff_db_true[bs0, :])
+        max_sinr  = tf.reduce_max(sinr_eff_db_true[bs0, :])
+        tf.print("SINR_eff_dB [BS0]  : mean=", mean_sinr, " min=", min_sinr, " max=", max_sinr)
+
+        tf.print("HARQ [BS0] (1=ACK,0=NACK):", harq_feedback[bs0, :])
+        tf.print("tbler_step (0=ACK,1=NACK,NaN=no TX):", tbler_step_per_ue)
+
+        tf.print("SE_LA [BS0] b/Hz   :", se_la[bs0, :])
+        tf.print("SE_Sh  [BS0] b/Hz  :", se_shannon[bs0, :])
+        tf.print("====================\n")
         """
+
+
+        return (
+            harq_feedback, sinr_eff_feedback, num_decoded_bits,
+            se_la, se_shannon, sinr_eff_db_true, 
+            tbler_step_per_ue,  
+            step_blocks, harq_feedback_masked
+        )
+
+
+
+
+    def get_current_channel_tensor(self) -> tf.Tensor:
         if not hasattr(self, 'current_cfr_for_current_step'):
             raise ValueError("No se ha actualizado current_cfr_for_current_step aún.")
+        return self.current_cfr_for_current_step
 
-        h_numpy = self.current_cfr_for_current_step
-        h_tensor = tf.convert_to_tensor(h_numpy, dtype=tf.complex64)
-        return h_tensor
 
 
     def run_sys_step(self):
@@ -752,19 +772,20 @@ class SionnaRT:
         self.update_and_store_cfr_for_step()
         h = self.get_current_channel_tensor()
 
+ 
+       
+        
+
+        
         (self.harq_feedback,
         self.sinr_eff_feedback,
         self.num_decoded_bits,
-        mcs_index,
         se_la,
         se_shannon,
         sinr_eff_db_true,
-        pf_metric,
-        ut_scheduled,
-        bler_per_user,
-        goodput_per_user,
-        num_re_per_user,
-        step_blocks) = self.sys_step(
+        tbler_per_user,            # << renombrado (antes bler_per_user)
+        step_blocks,
+        harq_feedback_masked) = self.sys_step(
             h=h,
             harq_feedback=self.harq_feedback,
             sinr_eff_feedback=self.sinr_eff_feedback,
@@ -773,28 +794,21 @@ class SionnaRT:
 
         # ---------- Inicializar acumuladores si no existen ----------
         if not hasattr(self, "blocks_acc_tx"):
-            self.blocks_acc_tx = [0 for _ in range(self.num_ut)]  # intentos (TX) acumulados
+            self.blocks_acc_tx = [0 for _ in range(self.num_ut)]
         if not hasattr(self, "blocks_acc_ok"):
-            self.blocks_acc_ok = [0 for _ in range(self.num_ut)]  # éxitos (OK) acumulados
+            self.blocks_acc_ok = [0 for _ in range(self.num_ut)]
         if not hasattr(self, "bits_acc_total"):
-            self.bits_acc_total = [0 for _ in range(self.num_ut)] # bits ok acumulados
+            self.bits_acc_total = [0 for _ in range(self.num_ut)]
 
         # ---------- Pasar a numpy para armar métricas ----------
-        sinr_eff_db_true_np = sinr_eff_db_true.numpy()[0, :]    # [num_ut]
-        se_la_np            = se_la.numpy()[0, :]               # [num_ut]
-        se_shannon_np       = se_shannon.numpy()[0, :]          # [num_ut]
-        mcs_index_np        = mcs_index.numpy()[0, :]           # [num_ut]
-        bler_np             = bler_per_user.numpy()[0, :]       # [num_ut]
-        goodput_np          = goodput_per_user.numpy()[0, :]    # [num_ut]
-        bits_np             = self.num_decoded_bits.numpy()[0, :]# [num_ut]
+        sinr_eff_db_true_np = sinr_eff_db_true.numpy()[0, :]  # [num_ut]
+        se_la_np = se_la.numpy()[0, :]                        # [num_ut]
+        se_shannon_np = se_shannon.numpy()[0, :]              # [num_ut]        
+        tbler_np = tbler_per_user.numpy()[0, :]               # [num_ut]  (0/1/NaN)
+        bits_np = self.num_decoded_bits.numpy()[0, :]         # [num_ut]
 
-        blocks_tx_step_per_ue_np   = step_blocks["blocks_tx_step_per_ue"].numpy()   # [num_ut]
-        blocks_ok_step_per_ue_np   = step_blocks["blocks_ok_step_per_ue"].numpy()   # [num_ut]
-        success_rate_step_per_ue_np= step_blocks["success_rate_step_per_ue"].numpy()# [num_ut]
-
-        blocks_tx_step_total_np    = int(step_blocks["blocks_tx_step_total"].numpy())
-        blocks_ok_step_total_np    = int(step_blocks["blocks_ok_step_total"].numpy())
-        success_rate_step_total_np = float(step_blocks["success_rate_step_total"].numpy())
+        blocks_tx_step_per_ue_np = step_blocks["blocks_tx_step_per_ue"].numpy()          # [num_ut]
+        blocks_ok_step_per_ue_np = step_blocks["blocks_ok_step_per_ue"].numpy()          # [num_ut]
 
         # ---------- Acumular ----------
         for i in range(self.num_ut):
@@ -802,88 +816,142 @@ class SionnaRT:
             self.blocks_acc_ok[i] += int(blocks_ok_step_per_ue_np[i])
             self.bits_acc_total[i] += int(bits_np[i])
 
-        # % éxito acumulado por UE
-        success_rate_accum_per_ue = [
-            (self.blocks_acc_ok[i] / self.blocks_acc_tx[i]) if self.blocks_acc_tx[i] > 0 else 0.0
-            for i in range(self.num_ut)
-        ]
+       
 
         # ---------- Métricas por-UE ----------
         ue_metrics = []
-        prx_list = self.compute_prx_dbm()  # asumes que devuelve lista/array de len num_ut
+        prx_list = self.compute_prx_dbm()
         for i in range(self.num_ut):
+            se_la_i       = float(se_la_np[i])
+            se_shannon_i  = float(se_shannon_np[i])
+            if se_shannon_i > 0.0:
+                se_gap_pct_i = max(0.0, (1.0 - (se_la_i / se_shannon_i)) * 100.0)
+            else:
+                se_gap_pct_i = float('nan')
+
             ue_metrics.append({
-                "ue_id": i,
-                "sinr_eff_db": float(sinr_eff_db_true_np[i]),
-                "prx_dbm": float(prx_list[i]),
-                "se_la": float(se_la_np[i]),
-                "se_shannon": float(se_shannon_np[i]),
-                "num_decoded_bits": int(bits_np[i]),
-                "bler": float(bler_np[i]),
-                "goodput": float(goodput_np[i]),
-                "mcs_index": int(mcs_index_np[i]),
+                "ue_id": i, #
+                "sinr_eff_db": float(sinr_eff_db_true_np[i]), #
+                "prx_dbm": float(prx_list[i]), 
+                "se_la": float(se_la_np[i]), #
+                "se_shannon": float(se_shannon_np[i]), #
+                "se_gap_pct": se_gap_pct_i, #
 
-                # --- NUEVO: bloques por step y acumulados ---
-                "blocks_tx_step": int(blocks_tx_step_per_ue_np[i]),
-                "blocks_ok_step": int(blocks_ok_step_per_ue_np[i]),
-                "success_rate_step": float(success_rate_step_per_ue_np[i]),
-
-                "blocks_tx_accum": int(self.blocks_acc_tx[i]),
-                "blocks_ok_accum": int(self.blocks_acc_ok[i]),
-                "success_rate_accum": float(success_rate_accum_per_ue[i]),
-
-                # Bits OK acumulados (útil para totals)
-                "bits_ok_accum": int(self.bits_acc_total[i]),
+                # Métrica TBLER del step por UE (0/1/NaN si no transmitió)
+                "tbler": float(tbler_np[i]), #
             })
 
-        # ---------- Resumen para render/tabla inferior derecha ----------
-        step_blocks_summary = {
-            "blocks_tx_step_total": blocks_tx_step_total_np,
-            "blocks_ok_step_total": blocks_ok_step_total_np,
-            "success_rate_step_total": success_rate_step_total_np,
+        
 
-            "blocks_tx_step_per_ue": [int(v) for v in blocks_tx_step_per_ue_np],
-            "blocks_ok_step_per_ue": [int(v) for v in blocks_ok_step_per_ue_np],
-            "success_rate_step_per_ue": [float(v) for v in success_rate_step_per_ue_np],
 
-            "blocks_tx_accum_per_ue": [int(v) for v in self.blocks_acc_tx],
-            "blocks_ok_accum_per_ue": [int(v) for v in self.blocks_acc_ok],
-            "success_rate_accum_per_ue": [float(v) for v in success_rate_accum_per_ue],
-            "bits_acc_total_per_ue": [int(v) for v in self.bits_acc_total],
-        }
+        # ---------- Historial HARQ estilo tutorial ----------
+        if not hasattr(self, "harq_feedback_hist"):
+            self.harq_feedback_hist = []  # lista de arrays [num_bs, num_ut] con -1/0/1
+
+        harq_mask_np = harq_feedback_masked.numpy()      # [num_bs, num_ut]
+        self.harq_feedback_hist.append(harq_mask_np)     # apéndice por step
+
+        # ---------- TBLER running por UE (idéntico a tutorial) ----------
+        # Construye tensor [S, num_bs, num_ut]
+        harq_hist_np = np.stack(self.harq_feedback_hist, axis=0)
+
+        # Usamos BS=0 para la curva clásica (puedes extender a multi-BS si lo necesitas)
+        harq_bs0 = harq_hist_np[:, 0, :]                 # [S, num_ut]
+
+        # Reemplaza -1 (unscheduled) por NaN para usar nancumsum/nanmean
+        harq_bs0_nan = harq_bs0.astype(float)
+        harq_bs0_nan[harq_bs0_nan == -1] = np.nan        # ACK=1, NACK=0, UNSCHED=NaN
+
+        # Acumulados de TX y OK
+        tx_cum = np.cumsum(~np.isnan(harq_bs0_nan), axis=0).astype(float)  # [S, num_ut]
+        ok_cum = np.nancumsum(harq_bs0_nan, axis=0)                        # [S, num_ut]
+
+        # TBLER running = 1 - OK_acum / TX_acum
+        tbler_running_per_ue = 1.0 - (ok_cum / np.maximum(tx_cum, 1.0))    # [S, num_ut]
+        tbler_running_per_ue_step = tbler_running_per_ue[-1, :]            # [num_ut]
+
 
         return {
             "ue_metrics": ue_metrics,
-            "pf_metric": pf_metric,
-            "ut_scheduled": ut_scheduled,
-            "step_blocks_summary": step_blocks_summary,  # << NUEVO
+            
+
+            # === NUEVO: iguales al tutorial, por UE (y un promedio global útil) ===
+            "tbler_running_per_ue": tbler_running_per_ue_step.tolist(),            
         }
 
 
 
     def update_and_store_cfr_for_step(self):
         """
-        Calcula el canal CFR para el step actual y lo guarda para SYS.
+        Calcula el CFR para el step actual y lo deja listo para SYS
+        con forma [num_ut, num_ut_ant, num_bs, num_bs_ant, T, F].
         """
-        # Obtención de paths
+        # 1) Paths y frecuencias
         paths = self._paths()
-        # Definición de frecuencias para subports OFDM
         frequencies = subcarrier_frequencies(
             num_subcarriers=self.num_subcarriers,
             subcarrier_spacing=self.subcarrier_spacing
         )
-        # Cálculo CFR en numpy
-        h_freq = paths.cfr(
+
+        # 2) CFR crudo desde RT (numpy): [num_rx, num_tx, T, F]
+        h_freq_np = paths.cfr(
             frequencies=frequencies,
             sampling_frequency=1 / self.resource_grid.ofdm_symbol_duration,
             num_time_steps=self.num_ofdm_symbols,
             out_type="numpy"
-        )  # Forma [num_rx, num_tx, num_ofdm_symbols, num_subcarriers]
+        )
 
-        # Aquí puede ser necesario hacer reshape, expand_dims, transposición
-        # para obtener una forma compatible con SYS
-        self.current_cfr_for_current_step = h_freq
+        # 3) Formateo robusto a layout SYS y guardado
+        h_tf = tf.convert_to_tensor(h_freq_np, dtype=tf.complex64)
+        
+        self.current_cfr_for_current_step = h_tf
 
 
-    
-    
+
+    def _format_cfr_for_sys(self, h_freq_np: np.ndarray) -> tf.Tensor:
+        """
+        Acepta CFR desde Sionna RT en:
+        - 6D: [num_ut, num_ut_ant, num_bs, num_bs_ant, T, F]  (SYS-ready)
+        - 4D: [num_rx, num_tx, T, F]  (se re-formatea)
+        Devuelve TF tensor complex64 con forma SYS:
+        [num_ut, num_ut_ant, num_bs, num_bs_ant, T, F]
+        """
+        if h_freq_np.ndim == 6:
+            # Caso SYS-ready: [num_ut, num_ut_ant, num_bs, num_bs_ant, T, F]
+            nu, nua, nbs, nbsa, T, F = h_freq_np.shape
+            # Asserts fuertes de consistencia:
+            if (nu, nua, nbs, nbsa) != (self.num_ut, self.num_ut_ant, self.num_bs, self.num_bs_ant):
+                raise ValueError(
+                    f"Layout 6D recibido pero dims no coinciden con la config:\n"
+                    f"  recibido  = (num_ut={nu}, num_ut_ant={nua}, num_bs={nbs}, num_bs_ant={nbsa}, T={T}, F={F})\n"
+                    f"  esperado  = (num_ut={self.num_ut}, num_ut_ant={self.num_ut_ant}, "
+                    f"num_bs={self.num_bs}, num_bs_ant={self.num_bs_ant}, T=?, F=?)"
+                )
+            h_tf = tf.convert_to_tensor(h_freq_np, dtype=tf.complex64)
+            tf.debugging.assert_shapes([
+                (h_tf, (self.num_ut, self.num_ut_ant, self.num_bs, self.num_bs_ant, T, F))
+            ])
+            return h_tf
+
+        elif h_freq_np.ndim == 4:
+            # Caso 4D: [num_rx, num_tx, T, F] -> hacer reshape
+            num_rx, num_tx, T, F = h_freq_np.shape
+            exp_rx = self.num_ut * self.num_ut_ant
+            exp_tx = self.num_bs * self.num_bs_ant
+            if num_rx != exp_rx or num_tx != exp_tx:
+                raise ValueError(
+                    f"Dimensiones 4D no coinciden para reshape SYS:\n"
+                    f"  num_rx={num_rx} (esperado {exp_rx}=num_ut*num_ut_ant), "
+                    f"num_tx={num_tx} (esperado {exp_tx}=num_bs*num_bs_ant)"
+                )
+            h_tf = tf.convert_to_tensor(h_freq_np, dtype=tf.complex64)  # [RX, TX, T, F]
+            h_tf = tf.reshape(h_tf, [self.num_ut, self.num_ut_ant, self.num_bs, self.num_bs_ant, T, F])
+            tf.debugging.assert_shapes([
+                (h_tf, (self.num_ut, self.num_ut_ant, self.num_bs, self.num_bs_ant, T, F))
+            ])
+            return h_tf
+
+        else:
+            raise ValueError(
+                f"h_freq debe ser 4D u 6D. Recibido shape={h_freq_np.shape} (ndim={h_freq_np.ndim})"
+            )

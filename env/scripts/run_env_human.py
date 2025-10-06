@@ -20,17 +20,22 @@ import pandas as pd
 
 # === Configuración del escenario (edita aquí) ===
 
-SCENE = "simple_street_canyon_with_cars"  # santiago.xml municg - san_francisco - simple_street_canyon - simple_street_canyon_with_cars
+SCENE = "simple_street_canyon_with_cars"  # santiago.xml munich - san_francisco - simple_street_canyon - simple_street_canyon_with_cars
+
+
 DRONE_START = (0.0, 0.0, 10.0)    # (x, y, z) en metros
 RX_POSITIONS = [
     (-50.0, 0.0, 1.5),
-    (0.0,   30.0, 1.5),
-    ( 20.0,  -30.0, 1.5),
-    (80.0,   40.0, 1.5),
-    (  50.0,    0.0, 1.5),
-    (90, -55, 1.5),
+    #(0.0,   30.0, 1.5),
+    (20.0,  -30.0, 1.5),
+    #(80.0,   40.0, 1.5),
+    #(50.0,    0.0, 1.5),
+    #(90, -55, 1.5),
+    (10.0, 0.0, 1.5),
+    (-10.0, 0.0, 1.5),
+    (-1.0, 0.0, 1.5),
 ]
-MAX_STEPS = 100
+MAX_STEPS = 50
 
 
 if __name__ == "__main__":
@@ -42,21 +47,22 @@ if __name__ == "__main__":
         max_steps=MAX_STEPS,
         drone_start=DRONE_START,
         rx_positions=RX_POSITIONS if RX_POSITIONS else None,
-        antenna_mode="ISO",  # "ISO", "SECTOR3_3GPP"
+        antenna_mode="SECTOR3_3GPP",  # "ISO", "SECTOR3_3GPP"
     )
     obs, info = env.reset(seed=0)
     done, trunc = False, False
 
-    metrics_history = []
     count = 0
     while not (done or trunc):
         a = [0, 0, 0]
         obs, rew, done, trunc, info = env.step(a)
 
+        #time.sleep(1)  # para ver mejor la animación
+
         
 
         
-    time.sleep(20)  # para ver mejor la animación
+    #time.sleep(20)  # para ver mejor la animación
     env.close()
 
 
