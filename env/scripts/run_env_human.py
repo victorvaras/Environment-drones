@@ -17,7 +17,6 @@ from env.environment.gymnasium_env import DroneEnv  # <- usa tu archivo renombra
 
 import pandas as pd
 
-
 # === Configuración del escenario (edita aquí) ===
 
 SCENE = "simple_street_canyon_with_cars"  # santiago.xml munich - san_francisco - simple_street_canyon - simple_street_canyon_with_cars
@@ -55,7 +54,8 @@ if __name__ == "__main__":
     count = 0
     while not (done or trunc):
         a = [0, 0, 0]
-        obs, rew, done, trunc, info = env.step(a)
+        b = np.random.uniform(-2, 2, size = (3,)) #Movimiento aleatorio
+        obs, rew, done, trunc, info = env.step(a, b)
 
         #time.sleep(1)  # para ver mejor la animación
 

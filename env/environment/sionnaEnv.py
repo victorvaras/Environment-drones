@@ -342,6 +342,10 @@ class SionnaRT:
         # Transmisores según modo
         self._create_transmitters()
 
+        pmin, pmax = self.scene_bounds_xyz()
+        print("Escena min:", pmin, "Escena max:", pmax)
+
+
         # Sanity
         assert self.scene is not None and self._solver is not None and self.tx is not None, \
             "Sionna RT no quedó inicializado correctamente."
@@ -430,6 +434,23 @@ class SionnaRT:
         for tx in self.txs:
             tx.position = pos
         # Mantiene orientaciones según el modo (no se recalculan aquí)
+
+
+
+    def scene_bounds_xyz(self) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Devuelve (min_xyz, max_xyz) de la escena en metros.
+        Requiere que self.scene ya esté construido por build_scene().
+        """
+        # Mitsuba Scene subyacente
+        mi_scene = self.scene.mi_scene            # Sionna -> Mitsuba scene
+
+        # Bounding box global de la escena
+        bb = mi_scene.bbox()                      # mi.BoundingBox3f  (min, max)
+
+        pmin = np.array([float(bb.min.x), float(bb.min.y), float(bb.min.z)], dtype=float)
+        pmax = np.array([float(bb.max.x), float(bb.max.y), float(bb.max.z)], dtype=float)
+        return pmin, pmax
 
     # ---- Cálculo de paths y métricas ----
     def _paths(self):

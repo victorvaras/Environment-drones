@@ -54,7 +54,7 @@ class DroneEnv(gym.Env):
         # --- Iniciando Sionna RT ---
         self.rt = SionnaRT(
             antenna_mode=antenna_mode,
-            # frequency_mhz=frequency_mhz,
+            frequency_mhz=frequency_mhz,
             # tx_power_dbm=tx_power_dbm,
             # bandwidth_hz=bandwidth_hz,
             scene_name=scene_name,
@@ -138,7 +138,7 @@ class DroneEnv(gym.Env):
 
         return obs, info
 
-    def step(self, action: np.ndarray):
+    def step(self, action: np.ndarray, actionR: np.ndarray):
         self.step_count += 1
 
         # Movimiento del dron
@@ -146,6 +146,11 @@ class DroneEnv(gym.Env):
         self.rt.move_tx(self.dron.pos)
 
         # Movimiento de personas
+        #Movimiento de personas o receptores
+        rx_positions = self.receptores.step_all(actionR) #Se llama al metodo que se encarga de mover a los receptores
+        for rx, pos in zip(self.rt.rx_list, rx_positions):
+            rx.position = [float(pos[0]), float(pos[1]), float(pos[2])]
+
 
         # --- Ejecutar paso SYS y obtener métricas ---
         sys_metrics = self.rt.run_sys_step()
