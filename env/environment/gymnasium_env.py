@@ -4,7 +4,6 @@ import datetime
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
-from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas  # para rgb_array
 import sys
 from pathlib import Path
 
@@ -206,6 +205,31 @@ class DroneEnv(gym.Env):
             layout="constrained"  # equivale a set_constrained_layout(True)
         )
 
+        # === TÍTULO GLOBAL ===
+        antenna_mode = getattr(self.rt, "antenna_mode", "N/A")
+        freq_mhz = getattr(self.rt, "freq_hz", 0) / 1e6
+        tx_power = getattr(self.rt, "tx_power_dbm_total", 0)
+
+        title_text = (
+            f"Simulación Dron-Receptores | "
+            f"Antena: {antenna_mode} | f = {freq_mhz:.1f} MHz | Potencia total = {tx_power:.1f} dBm | "
+            f"Step: 0/{self.max_steps}"
+        )
+
+        self._suptitle = self._fig.suptitle(
+            title_text,
+            fontsize=15,
+            fontweight='bold',
+            y=0.98
+        )
+
+        # Gridspec con espacio arriba
+        gs = self._fig.add_gridspec(
+            1, 2,
+            width_ratios=[1.0, 1.2],
+            top=0.94  # deja espacio para el título
+        )
+
         # Gridspec principal
         gs = self._fig.add_gridspec(1, 2, width_ratios=[1.0, 1.2])  # un poco más ancho el panel izquierdo
 
@@ -224,9 +248,11 @@ class DroneEnv(gym.Env):
         self._ax_list.axis("off")
 
         # Subgrilla derecha (tablas: arriba métricas, abajo bloques)
-        gs_right = gs[0, 1].subgridspec(2, 1, height_ratios=[0.62, 0.38])
-        self._ax_table_top = self._fig.add_subplot(gs_right[0, 0])
-        self._ax_table_br = self._fig.add_subplot(gs_right[1, 0])
+        gs_right = gs[0, 1].subgridspec(3, 1, height_ratios=[0.10, 0.55, 0.35], hspace=0.15)
+        self._ax_spaces=self._fig.add_subplot(gs_right[0, 0])
+        self._ax_spaces.axis("off")
+        self._ax_table_top = self._fig.add_subplot(gs_right[1, 0])
+        self._ax_table_br = self._fig.add_subplot(gs_right[2, 0])
         for ax in (self._ax_table_top, self._ax_table_br):
             ax.axis("off")
         self._ax_table_top.set_title("Métricas de canal por receptor")
@@ -234,15 +260,14 @@ class DroneEnv(gym.Env):
         # Canvas Agg, común a human y rgb_array
         self._canvas = FigureCanvas(self._fig)
 
-        # No uses tight_layout junto con constrained; si lo tenías, elimínalo.
         if self.render_mode == "human":
             try:
                 self._auto_view_2d(margin_ratio=getattr(self, "view_margin", 0.05))
             except Exception:
                 pass
 
-            plt.ion()
-            plt.show(block=False)
+            plt.ion()  # modo interactivo
+            plt.show(block=False)  # muestra la ventana SIN bloquear
 
     def _render_common(self):
         import numpy as np
@@ -254,6 +279,20 @@ class DroneEnv(gym.Env):
         prx = np.asarray(self.rt.compute_prx_dbm(), dtype=float).reshape(-1)
         rx = self.receptores.positions_xyz()  # shape (N, 3)
         drone_xyz = np.asarray(self.dron.pos, dtype=float).reshape(3)
+
+        # === ACTUALIZAR STEP EN EL TÍTULO ===
+        if hasattr(self, '_suptitle'):
+            antenna_mode = getattr(self.rt, "antenna_mode", "N/A")
+            freq_mhz = getattr(self.rt, "freq_hz", 0) / 1e6
+            tx_power = getattr(self.rt, "tx_power_dbm_total", 0)
+
+            title_text = (
+                f"Simulación Dron-Receptores | "
+                f"Antena: {antenna_mode} | f = {freq_mhz:.1f} MHz | Potencia total = {tx_power:.1f} dBm | "
+                f"Step: {self.step_count}/{self.max_steps}"
+            )
+
+            self._suptitle.set_text(title_text)
 
         # ===== MAPA (izq/arriba) =====
         if self._sc_rx is None:
@@ -401,29 +440,38 @@ class DroneEnv(gym.Env):
 
     def _auto_view_2d(self, margin_ratio: float = 0.05):
         """
-        Encadra el mapa 2D para abarcar el AABB de la escena con aspect igual y margen.
-        margin_ratio=0.05 añade ~5% de margen en cada eje.
+        Ajusta la vista 2D usando los límites (min y max) entregados por SionnaRT.
+        Usa self.rt.scene_bounds = (min_xyz, max_xyz)
+        margin_ratio: margen porcentual extra alrededor de la escena.
         """
-        if self.scene is None:
-            return
+        import numpy as np
 
-        aabb = self.scene.aabb
-        mn, mx = aabb[0], aabb[1]
-        xmin, xmax = float(mn[0]), float(mx[0])
-        ymin, ymax = float(mn[1]), float(mx[1])
+        # --- Recuperar límites desde SionnaRT ---
+        if hasattr(self.rt, "scene_bounds"):
+            mn, mx = self.rt.scene_bounds
+        else:
+            raise AttributeError("No se encontraron los límites de la escena (scene_bounds) en self.rt")
 
-        # Tamaño y margen
+        mn = np.array(mn, dtype=float)
+        mx = np.array(mx, dtype=float)
+
+        # --- Tomar solo las coordenadas X e Y ---
+        xmin, xmax = mn[0], mx[0]
+        ymin, ymax = mn[1], mx[1]
+
+        # --- Calcular tamaño y margen ---
         w = max(1e-6, xmax - xmin)
         h = max(1e-6, ymax - ymin)
         mxr = w * margin_ratio
         myr = h * margin_ratio
 
-        # Fijar aspecto y límites exactos
+        # --- Aplicar los límites a los ejes ---
         self._ax_map.set_aspect("equal", adjustable="box")
         self._ax_map.set_xlim(xmin - mxr, xmax + mxr)
         self._ax_map.set_ylim(ymin - myr, ymax + myr)
+        self._ax_map.grid(True, alpha=0.3)
 
-        # Desactiva autoscale implícito y usa autoscale_view para respetar límites actuales si añades artistas
+        # --- Evitar autoescala ---
         self._ax_map.autoscale(enable=False)
         self._ax_map.autoscale_view(tight=True)
 
