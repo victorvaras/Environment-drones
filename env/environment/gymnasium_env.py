@@ -205,6 +205,31 @@ class DroneEnv(gym.Env):
             layout="constrained"  # equivale a set_constrained_layout(True)
         )
 
+        # === TÍTULO GLOBAL ===
+        antenna_mode = getattr(self.rt, "antenna_mode", "N/A")
+        freq_mhz = getattr(self.rt, "freq_hz", 0) / 1e6
+        tx_power = getattr(self.rt, "tx_power_dbm_total", 0)
+
+        title_text = (
+            f"Simulación Dron-Receptores | "
+            f"Antena: {antenna_mode} | f = {freq_mhz:.1f} MHz | Potencia total = {tx_power:.1f} dBm | "
+            f"Step: 0/{self.max_steps}"
+        )
+
+        self._suptitle = self._fig.suptitle(
+            title_text,
+            fontsize=15,
+            fontweight='bold',
+            y=0.98
+        )
+
+        # Gridspec con espacio arriba
+        gs = self._fig.add_gridspec(
+            1, 2,
+            width_ratios=[1.0, 1.2],
+            top=0.94  # deja espacio para el título
+        )
+
         # Gridspec principal
         gs = self._fig.add_gridspec(1, 2, width_ratios=[1.0, 1.2])  # un poco más ancho el panel izquierdo
 
@@ -223,9 +248,11 @@ class DroneEnv(gym.Env):
         self._ax_list.axis("off")
 
         # Subgrilla derecha (tablas: arriba métricas, abajo bloques)
-        gs_right = gs[0, 1].subgridspec(2, 1, height_ratios=[0.62, 0.38])
-        self._ax_table_top = self._fig.add_subplot(gs_right[0, 0])
-        self._ax_table_br = self._fig.add_subplot(gs_right[1, 0])
+        gs_right = gs[0, 1].subgridspec(3, 1, height_ratios=[0.10, 0.55, 0.35], hspace=0.15)
+        self._ax_spaces=self._fig.add_subplot(gs_right[0, 0])
+        self._ax_spaces.axis("off")
+        self._ax_table_top = self._fig.add_subplot(gs_right[1, 0])
+        self._ax_table_br = self._fig.add_subplot(gs_right[2, 0])
         for ax in (self._ax_table_top, self._ax_table_br):
             ax.axis("off")
         self._ax_table_top.set_title("Métricas de canal por receptor")
@@ -252,6 +279,20 @@ class DroneEnv(gym.Env):
         prx = np.asarray(self.rt.compute_prx_dbm(), dtype=float).reshape(-1)
         rx = self.receptores.positions_xyz()  # shape (N, 3)
         drone_xyz = np.asarray(self.dron.pos, dtype=float).reshape(3)
+
+        # === ACTUALIZAR STEP EN EL TÍTULO ===
+        if hasattr(self, '_suptitle'):
+            antenna_mode = getattr(self.rt, "antenna_mode", "N/A")
+            freq_mhz = getattr(self.rt, "freq_hz", 0) / 1e6
+            tx_power = getattr(self.rt, "tx_power_dbm_total", 0)
+
+            title_text = (
+                f"Simulación Dron-Receptores | "
+                f"Antena: {antenna_mode} | f = {freq_mhz:.1f} MHz | Potencia total = {tx_power:.1f} dBm | "
+                f"Step: {self.step_count}/{self.max_steps}"
+            )
+
+            self._suptitle.set_text(title_text)
 
         # ===== MAPA (izq/arriba) =====
         if self._sc_rx is None:
