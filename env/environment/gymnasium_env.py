@@ -4,7 +4,6 @@ import datetime
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
-from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas  # para rgb_array
 import sys
 from pathlib import Path
 
@@ -234,15 +233,14 @@ class DroneEnv(gym.Env):
         # Canvas Agg, común a human y rgb_array
         self._canvas = FigureCanvas(self._fig)
 
-        # No uses tight_layout junto con constrained; si lo tenías, elimínalo.
         if self.render_mode == "human":
             try:
                 self._auto_view_2d(margin_ratio=getattr(self, "view_margin", 0.05))
             except Exception:
                 pass
 
-            plt.ion()
-            plt.show(block=False)
+            plt.ion()  # modo interactivo
+            plt.show(block=False)  # muestra la ventana SIN bloquear
 
     def _render_common(self):
         import numpy as np
@@ -401,29 +399,38 @@ class DroneEnv(gym.Env):
 
     def _auto_view_2d(self, margin_ratio: float = 0.05):
         """
-        Encadra el mapa 2D para abarcar el AABB de la escena con aspect igual y margen.
-        margin_ratio=0.05 añade ~5% de margen en cada eje.
+        Ajusta la vista 2D usando los límites (min y max) entregados por SionnaRT.
+        Usa self.rt.scene_bounds = (min_xyz, max_xyz)
+        margin_ratio: margen porcentual extra alrededor de la escena.
         """
-        if self.scene is None:
-            return
+        import numpy as np
 
-        aabb = self.scene.aabb
-        mn, mx = aabb[0], aabb[1]
-        xmin, xmax = float(mn[0]), float(mx[0])
-        ymin, ymax = float(mn[1]), float(mx[1])
+        # --- Recuperar límites desde SionnaRT ---
+        if hasattr(self.rt, "scene_bounds"):
+            mn, mx = self.rt.scene_bounds
+        else:
+            raise AttributeError("No se encontraron los límites de la escena (scene_bounds) en self.rt")
 
-        # Tamaño y margen
+        mn = np.array(mn, dtype=float)
+        mx = np.array(mx, dtype=float)
+
+        # --- Tomar solo las coordenadas X e Y ---
+        xmin, xmax = mn[0], mx[0]
+        ymin, ymax = mn[1], mx[1]
+
+        # --- Calcular tamaño y margen ---
         w = max(1e-6, xmax - xmin)
         h = max(1e-6, ymax - ymin)
         mxr = w * margin_ratio
         myr = h * margin_ratio
 
-        # Fijar aspecto y límites exactos
+        # --- Aplicar los límites a los ejes ---
         self._ax_map.set_aspect("equal", adjustable="box")
         self._ax_map.set_xlim(xmin - mxr, xmax + mxr)
         self._ax_map.set_ylim(ymin - myr, ymax + myr)
+        self._ax_map.grid(True, alpha=0.3)
 
-        # Desactiva autoscale implícito y usa autoscale_view para respetar límites actuales si añades artistas
+        # --- Evitar autoescala ---
         self._ax_map.autoscale(enable=False)
         self._ax_map.autoscale_view(tight=True)
 

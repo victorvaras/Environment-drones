@@ -307,6 +307,10 @@ class SionnaRT:
 
         self.scene = scene
         self.scene.frequency = self.freq_hz
+        pmin, pmax = self.scene_bounds_xyz()
+
+        # 🔹 Guardamos los límites de la escena para que DroneEnv pueda usarlos
+        self.scene_bounds = (pmin, pmax)
 
         # Configura arrays globales (se aplican a todos los TX/RX)
         # Si el modo es SECTOR3_3GPP y el usuario dejó "iso", forzamos patrón 3GPP:
@@ -341,10 +345,6 @@ class SionnaRT:
 
         # Transmisores según modo
         self._create_transmitters()
-
-        pmin, pmax = self.scene_bounds_xyz()
-        print("Escena min:", pmin, "Escena max:", pmax)
-
 
         # Sanity
         assert self.scene is not None and self._solver is not None and self.tx is not None, \
