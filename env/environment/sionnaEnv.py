@@ -256,7 +256,7 @@ class SionnaRT:
             num_ofdm_sym=self.num_ofdm_symbols,
             batch_size=[self.num_bs],
             num_streams_per_ut=self.num_ut_ant,
-            beta=0.9
+            beta=0.9            # factor para eleccion de receptor 0 lo mas distribuido posible, 1 el que menos le a tocado
         )
 
         
@@ -423,7 +423,7 @@ class SionnaRT:
         for i, p in enumerate(rx_positions_xyz):
             rx = Receiver(name=f"RX_{i}",
                           position=[float(p[0]), float(p[1]), float(p[2])],
-                          display_radius=1.5)
+                          display_radius=1.5, color=(0, 0, 0))
             self.scene.add(rx)
             self.rx_list.append(rx)
 
@@ -546,9 +546,9 @@ class SionnaRT:
             return False
 
     def _auto_camera(self, z_scale: float = 1.6) -> Camera:
-        # Si la escena lo expone, usa su AABB
+
         try:
-            aabb = self.scene.aabb
+            aabb = self.scene_bounds
             mn, mx = aabb[0], aabb[1]
             cx = float((mn[0] + mx[0]) / 2)
             cy = float((mn[1] + mx[1]) / 2)
@@ -557,30 +557,9 @@ class SionnaRT:
             return Camera(position=[cx, cy, z], look_at=[cx, cy, 0.0])
         except Exception:
             # Fallback fijo
+            print("No se pudo calcular cámara automáticamente, usando fallback.")
             return Camera(position=[0, 0, 300], look_at=[0, 0, 0])
         
-
-    
-
-    
-    @staticmethod
-    def _tf_db10(x):
-        x = tf.cast(x, tf.float32)
-        return 10.0 * tf.math.log(x) / tf.math.log(tf.constant(10.0, tf.float32))
-
-    @staticmethod
-    def _w_to_dbm(x):
-        x = tf.cast(x, tf.float32)
-        return 10.0 * tf.math.log(x) / tf.math.log(tf.constant(10.0, tf.float32)) + 30.0
-
-    def _tflog(self, *args):
-        # Si ya definiste self.debug_log en __init__, usamos archivo; si no, va a stderr
-        stream = "file://" + getattr(self, "debug_log", "")
-        if not getattr(self, "debug_log", None):
-            stream = "stderr"
-        tf.print(*args, output_stream=stream)
-
-
 
 
     # --- Calculo de SYS
@@ -713,7 +692,7 @@ class SionnaRT:
             tb_tx_step_per_ue > 0,
             1.0 - tf.cast(tb_ok_step_per_ue, tf.float32),
             tf.constant(float('nan'), dtype=tf.float32)
-)
+        )
 
 
 
@@ -732,45 +711,7 @@ class SionnaRT:
             
         }
 
-
-
-
-        """
-        # ===== DEBUG: tf.print métricas clave (siempre) =====
-        no_dbm = self._w_to_dbm(no)  # dBm por subportadora
-
-        bs0 = 0
-
-        # Protecciones de índice por si bs0 >= num_bs (no debería)
-        num_bs_tf = tf.shape(num_allocated_re)[0]
-        bs0 = tf.minimum(bs0, num_bs_tf - 1)
-
-        tf.print("\n=== [SYS DEBUG] ===")
-        tf.print("Δf [Hz]            :", tf.constant(float(self.subcarrier_spacing), dtype=tf.float32))
-        tf.print("no [W/sc], [dBm/sc]:", no, ",", no_dbm)
-
-        tf.print("REs asignados [BS0]:", num_allocated_re[bs0, :])
-
-        tf.print("Tx power/UE [BS0] W:", tx_power_per_ut[bs0, :],
-                " | sum W:", tf.reduce_sum(tx_power_per_ut[bs0, :]))
-
-        tf.print("MCS index [BS0]    :", mcs_index[bs0, :])
-
-        # sinr_eff_db_true: [num_bs, num_ut] (tras phy_abs)
-        mean_sinr = tf.reduce_mean(sinr_eff_db_true[bs0, :])
-        min_sinr  = tf.reduce_min(sinr_eff_db_true[bs0, :])
-        max_sinr  = tf.reduce_max(sinr_eff_db_true[bs0, :])
-        tf.print("SINR_eff_dB [BS0]  : mean=", mean_sinr, " min=", min_sinr, " max=", max_sinr)
-
-        tf.print("HARQ [BS0] (1=ACK,0=NACK):", harq_feedback[bs0, :])
-        tf.print("tbler_step (0=ACK,1=NACK,NaN=no TX):", tbler_step_per_ue)
-
-        tf.print("SE_LA [BS0] b/Hz   :", se_la[bs0, :])
-        tf.print("SE_Sh  [BS0] b/Hz  :", se_shannon[bs0, :])
-        tf.print("====================\n")
-        """
-
-
+       
         return (
             harq_feedback, sinr_eff_feedback, num_decoded_bits,
             se_la, se_shannon, sinr_eff_db_true, 
@@ -793,11 +734,7 @@ class SionnaRT:
         self.update_and_store_cfr_for_step()
         h = self.get_current_channel_tensor()
 
- 
-       
-        
 
-        
         (self.harq_feedback,
         self.sinr_eff_feedback,
         self.num_decoded_bits,
@@ -929,50 +866,4 @@ class SionnaRT:
 
 
 
-    def _format_cfr_for_sys(self, h_freq_np: np.ndarray) -> tf.Tensor:
-        """
-        Acepta CFR desde Sionna RT en:
-        - 6D: [num_ut, num_ut_ant, num_bs, num_bs_ant, T, F]  (SYS-ready)
-        - 4D: [num_rx, num_tx, T, F]  (se re-formatea)
-        Devuelve TF tensor complex64 con forma SYS:
-        [num_ut, num_ut_ant, num_bs, num_bs_ant, T, F]
-        """
-        if h_freq_np.ndim == 6:
-            # Caso SYS-ready: [num_ut, num_ut_ant, num_bs, num_bs_ant, T, F]
-            nu, nua, nbs, nbsa, T, F = h_freq_np.shape
-            # Asserts fuertes de consistencia:
-            if (nu, nua, nbs, nbsa) != (self.num_ut, self.num_ut_ant, self.num_bs, self.num_bs_ant):
-                raise ValueError(
-                    f"Layout 6D recibido pero dims no coinciden con la config:\n"
-                    f"  recibido  = (num_ut={nu}, num_ut_ant={nua}, num_bs={nbs}, num_bs_ant={nbsa}, T={T}, F={F})\n"
-                    f"  esperado  = (num_ut={self.num_ut}, num_ut_ant={self.num_ut_ant}, "
-                    f"num_bs={self.num_bs}, num_bs_ant={self.num_bs_ant}, T=?, F=?)"
-                )
-            h_tf = tf.convert_to_tensor(h_freq_np, dtype=tf.complex64)
-            tf.debugging.assert_shapes([
-                (h_tf, (self.num_ut, self.num_ut_ant, self.num_bs, self.num_bs_ant, T, F))
-            ])
-            return h_tf
-
-        elif h_freq_np.ndim == 4:
-            # Caso 4D: [num_rx, num_tx, T, F] -> hacer reshape
-            num_rx, num_tx, T, F = h_freq_np.shape
-            exp_rx = self.num_ut * self.num_ut_ant
-            exp_tx = self.num_bs * self.num_bs_ant
-            if num_rx != exp_rx or num_tx != exp_tx:
-                raise ValueError(
-                    f"Dimensiones 4D no coinciden para reshape SYS:\n"
-                    f"  num_rx={num_rx} (esperado {exp_rx}=num_ut*num_ut_ant), "
-                    f"num_tx={num_tx} (esperado {exp_tx}=num_bs*num_bs_ant)"
-                )
-            h_tf = tf.convert_to_tensor(h_freq_np, dtype=tf.complex64)  # [RX, TX, T, F]
-            h_tf = tf.reshape(h_tf, [self.num_ut, self.num_ut_ant, self.num_bs, self.num_bs_ant, T, F])
-            tf.debugging.assert_shapes([
-                (h_tf, (self.num_ut, self.num_ut_ant, self.num_bs, self.num_bs_ant, T, F))
-            ])
-            return h_tf
-
-        else:
-            raise ValueError(
-                f"h_freq debe ser 4D u 6D. Recibido shape={h_freq_np.shape} (ndim={h_freq_np.ndim})"
-            )
+    

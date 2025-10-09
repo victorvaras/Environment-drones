@@ -17,13 +17,19 @@ import time
 SCENE = "simple_street_canyon_with_cars"                  # nombre integrado o ruta a XML/carpeta
 DRONE_START = (0.0, 0.0, 20.0)    # (x, y, z) en metros
 RX_POSITIONS = [
-    (-50.0, 0.0, 1.5),
-    (0.0,   30.0, 1.5),
-    ( 20.0,  -30.0, 1.5),
-    (80.0,   40.0, 1.5),
-    (  50.0,    0.0, 1.5),
-    (90, -55, 1.5),
+    #(-50.0, 0.0, 1.5),
+    #(0.0,   30.0, 1.5),
+    #( 20.0,  -30.0, 1.5),
+    #(80.0,   40.0, 1.5),
+    #(  50.0,    0.0, 1.5),
+    #(90, -55, 1.5),
+
+    (20.0, -30.0, 1.5),
+    (10.0, 0.0, 1.5),
+    (-10.0, 0.0, 1.5),
 ]
+
+
 MAX_STEPS = 100
 
 # Carpeta donde se guardarán los videos
@@ -42,7 +48,7 @@ if __name__ == "__main__":
         max_steps=MAX_STEPS,
         drone_start=DRONE_START,
         rx_positions=RX_POSITIONS if RX_POSITIONS else None,
-        antenna_mode="ISO",  # "ISO" o "SECTOR3_3GPP"
+        antenna_mode="SECTOR3_3GPP",  # "ISO" o "SECTOR3_3GPP"
     )
     env = RecordVideo(env, str(OUTDIR), name_prefix="metricas_avanzadas-1")
 
@@ -50,7 +56,8 @@ if __name__ == "__main__":
     done, trunc = False, False
     while not (done or trunc):
         #a = np.random.uniform(-2, 2, size=(3,))    #Movimiento aleatorio
-        a = [0.1,0,0]     #Movimiento estatico
+        a = [0,0,0]     #Movimiento estatico
+        b = [0,0,0]     #Sin movimiento receptores
         obs, rew, done, trunc, info = env.step(a)
 
 
