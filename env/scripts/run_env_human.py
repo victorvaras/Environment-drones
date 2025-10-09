@@ -1,3 +1,7 @@
+# === Limpieza de logs TensorFlow ===
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  #0 = all, 1 = info, 2 = warnings, 3 = solo errors
+
 # === Bootstrap sys.path a la raíz del proyecto (dos niveles arriba) ===
 import sys
 from pathlib import Path

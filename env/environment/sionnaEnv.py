@@ -21,9 +21,6 @@ from sionna.phy.nr.utils import decode_mcs_index
 from sionna.phy.utils import log2, dbm_to_watt, lin_to_db
 from sionna.phy.constants import BOLTZMANN_CONSTANT
 
-import os
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # 2=WARNING mínimo, 3=ERROR
-
 import tensorflow as tf
 import logging
 tf.get_logger().setLevel(logging.ERROR)
