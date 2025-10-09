@@ -1,6 +1,10 @@
 # run_compare_metrics.py
 # -*- coding: utf-8 -*-
 
+# === Limpieza de logs===
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  #0 = all, 1 = info, 2 = warnings, 3 = solo errors
+
 # === Bootstrap sys.path a la raíz del proyecto (dos niveles arriba) ===
 import sys
 from pathlib import Path
@@ -457,7 +461,7 @@ def plot_all_metrics_combined(df_all: pd.DataFrame, out_dir: Path):
     for ue in ue_ids:
         # GridSpec: 4 filas, 2 columnas; fila 2 (índice 1) ocupa doble altura
         fig = plt.figure(figsize=(13, 10))
-        gs = GridSpec(nrows=4, ncols=2, height_ratios=[1, 2, 1, 1], hspace=0.25, wspace=0.18)
+        gs = GridSpec(nrows=4, ncols=2, height_ratios=[1.1, 2.4, 1.3, 0.3], hspace=0.35, wspace=0.28)
 
         ax_prx   = fig.add_subplot(gs[0, 0])      # PRx
         ax_sinr  = fig.add_subplot(gs[0, 1])      # SINR
@@ -554,7 +558,7 @@ def plot_all_metrics_combined(df_all: pd.DataFrame, out_dir: Path):
                    frameon=False, bbox_to_anchor=(0.5, 0.02))
 
         fig.suptitle(f"UE {ue} — freqs: {freqs_str}", fontsize=14, y=0.995)
-        fig.tight_layout(rect=[0.03, 0.06, 1, 0.97])
+        fig.tight_layout(rect=[0.04, 0.08, 0.98, 0.97])
 
         out_file = out_dir / f"UE{ue}_all_metrics.png"
         fig.savefig(out_file, dpi=180, bbox_inches="tight")
@@ -577,7 +581,7 @@ def plot_all_metrics_single_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir:
 
     for ue in ue_ids:
         fig = plt.figure(figsize=(13, 10))
-        gs = GridSpec(nrows=4, ncols=2, height_ratios=[1, 2, 1, 1], hspace=0.25, wspace=0.18)
+        gs = GridSpec(nrows=4, ncols=2, height_ratios=[1.1, 2.4, 1.3, 0.3], hspace=0.35, wspace=0.28)
         ax_prx   = fig.add_subplot(gs[0, 0])
         ax_sinr  = fig.add_subplot(gs[0, 1])
         ax_se    = fig.add_subplot(gs[1, :])
@@ -649,7 +653,7 @@ def plot_all_metrics_single_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir:
         fig.legend(H, L, loc="lower center", ncol=3, frameon=False, bbox_to_anchor=(0.5, 0.02))
 
         fig.suptitle(f"UE {ue} — freq: {label}", fontsize=14, y=0.995)
-        fig.tight_layout(rect=[0.03, 0.06, 1, 0.97])
+        fig.tight_layout(rect=[0.04, 0.08, 0.98, 0.97])
 
         out_file = out_dir / f"UE{ue}_all_metrics_{int(freq_mhz)}MHz.png"
         fig.savefig(out_file, dpi=180, bbox_inches="tight")
