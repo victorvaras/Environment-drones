@@ -251,7 +251,7 @@ class DroneEnv(gym.Env):
         self._ax_list.axis("off")
 
         # Subgrilla derecha (tablas: arriba métricas, abajo bloques)
-        gs_right = gs[0, 1].subgridspec(3, 1, height_ratios=[0.10, 0.55, 0.35], hspace=0.15)
+        gs_right = gs[0, 1].subgridspec(3, 1, height_ratios=[0.01, 0.55, 0.35], hspace=0.15)
         self._ax_spaces=self._fig.add_subplot(gs_right[0, 0])
         self._ax_spaces.axis("off")
         self._ax_table_top = self._fig.add_subplot(gs_right[1, 0])
