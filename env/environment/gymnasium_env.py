@@ -137,7 +137,7 @@ class DroneEnv(gym.Env):
 
         return obs, info
 
-    def step(self, action: np.ndarray, actionR: np.ndarray):
+    def step(self, action: np.ndarray, actionR: np.ndarray | None = None):
         self.step_count += 1
 
         # Movimiento del dron
@@ -146,6 +146,9 @@ class DroneEnv(gym.Env):
 
         # Movimiento de personas
         #Movimiento de personas o receptores
+        if actionR is None:
+            actionR = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+            
         rx_positions = self.receptores.step_all(actionR) #Se llama al metodo que se encarga de mover a los receptores
         for rx, pos in zip(self.rt.rx_list, rx_positions):
             rx.position = [float(pos[0]), float(pos[1]), float(pos[2])]
@@ -259,7 +262,7 @@ class DroneEnv(gym.Env):
 
         # Canvas Agg, común a human y rgb_array
         self._canvas = FigureCanvas(self._fig)
-
+        
         if self.render_mode == "human":
             try:
                 self._auto_view_2d(margin_ratio=getattr(self, "view_margin", 0.05))
@@ -268,6 +271,12 @@ class DroneEnv(gym.Env):
 
             plt.ion()  # modo interactivo
             plt.show(block=False)  # muestra la ventana SIN bloquear
+
+        if self.render_mode == "rgb_array":
+            try:
+                self._auto_view_2d(margin_ratio=getattr(self, "view_margin", 0.05))
+            except Exception:
+                pass
 
     def _render_common(self):
         import numpy as np

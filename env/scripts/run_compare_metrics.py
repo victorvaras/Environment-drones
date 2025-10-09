@@ -36,10 +36,11 @@ from env.environment.gymnasium_env import DroneEnv  # adapta si tu ruta difiere
 SCENE = "simple_street_canyon_with_cars"  # p.ej. "santiago.xml", "munich"
 DRONE_START = (0.0, 0.0, 10.0)
 RX_POSITIONS = [
-    (-50.0, 0.0, 1.5),
+    #(-50.0, 0.0, 1.5),
     (20.0, -30.0, 1.5),
-    #(10.0, 0.0, 1.5),
-    #(-10.0, 0.0, 1.5),
+    (10.0, 0.0, 1.5),
+    (-10.0, 0.0, 1.5),
+    (0, 0, 1.5),
     #(-1.0, 0.0, 1.5),
     #(0.0,   30.0, 1.5),
     #(20.0,  -30.0, 1.5),
@@ -180,7 +181,8 @@ def run_episode(freq_mhz: float) -> dict:
     drone_traj, ue_traj, steps = [], [], []
 
    
-
+    out_img = OUT_DIR / f"radio_map_{int(freq_mhz)}MHz.png"
+    env.rt.render_scene_to_file(filename=str(out_img), with_radio_map=True)
 
     t = 0
     while not (done or trunc):
@@ -222,14 +224,20 @@ def run_episode(freq_mhz: float) -> dict:
 
 
 def plot_trajectories_xy_xz(tracks: dict, out_path: Path, title_prefix="Trayectorias",
-                            step_stride=5, show_step_labels=False):
+                            step_stride=5, show_step_labels=False, rx_labels=None):
     """
-    XY + XZ, con títulos separados y leyenda global fuera (lado derecho).
+    XY + XZ, con títulos separados, leyenda global fuera (derecha) y:
+    - etiquetas "UEi" en la vista XY junto al punto inicial de cada receptor
+    - marcadores de inicio/fin para cada UE también en XZ
     """
-    drone = tracks["drone"]
-    ues   = tracks["ues"]
+    drone = tracks["drone"]      # (T,3)
+    ues   = tracks["ues"]        # (T,N,3)
     steps = tracks["steps"]
     T = drone.shape[0]; N = ues.shape[1]
+
+    # etiquetas por UE
+    if rx_labels is None or len(rx_labels) != N:
+        rx_labels = [f"UE{i}" for i in range(N)]
 
     def _auto_limits_xy(pad=5.0):
         d = drone[:, :2]
@@ -241,10 +249,9 @@ def plot_trajectories_xy_xz(tracks: dict, out_path: Path, title_prefix="Trayecto
 
     xmin, xmax, ymin, ymax = _auto_limits_xy(pad=5.0)
 
-    # Usamos subplots_adjust para reservar espacio a la derecha para la leyenda
+    # deja margen derecho para la leyenda (≈20%)
     fig = plt.figure(figsize=(13.8, 7.6))
     gs  = GridSpec(2, 1, height_ratios=[2, 1], figure=fig)
-    # deja margen derecho para la leyenda (≈20%)
     fig.subplots_adjust(left=0.08, right=0.80, top=0.90, bottom=0.08, hspace=0.32)
 
     ax_xy = fig.add_subplot(gs[0, 0])
@@ -255,10 +262,9 @@ def plot_trajectories_xy_xz(tracks: dict, out_path: Path, title_prefix="Trayecto
     ax_xy.set_xlabel("X [m]"); ax_xy.set_ylabel("Y [m]")
     ax_xy.set_aspect("equal", adjustable="box")
     ax_xy.set_xlim([xmin, xmax]); ax_xy.set_ylim([ymin, ymax])
-    ax_xy.grid(True, ls="--", alpha=0.35)
-    ax_xy.set_axisbelow(True)  # grilla debajo
+    ax_xy.grid(True, ls="--", alpha=0.35); ax_xy.set_axisbelow(True)
 
-    # Dron
+    # Drone
     ax_xy.plot(drone[:,0], drone[:,1], lw=2.0, label="Drone", zorder=2.5)
     ax_xy.scatter(drone[0,0], drone[0,1], s=110, marker="^", label="Drone start", zorder=3)
     ax_xy.scatter(drone[-1,0], drone[-1,1], s=110, marker=">", label="Drone end", zorder=3)
@@ -267,12 +273,20 @@ def plot_trajectories_xy_xz(tracks: dict, out_path: Path, title_prefix="Trayecto
         ax_xy.arrow(drone[k,0], drone[k,1], dx, dy, length_includes_head=True,
                     head_width=0.8, alpha=0.8, zorder=2.6)
 
-    # UEs
+    # UEs en XY (con etiquetas y marcadores inicio/fin)
     for i in range(N):
         traj = ues[:, i, :]
-        ax_xy.plot(traj[:,0], traj[:,1], lw=1.8, label=f"UE{i}", zorder=2.2)
-        ax_xy.scatter(traj[0,0], traj[0,1], s=70, marker="o", zorder=2.7)
-        ax_xy.scatter(traj[-1,0], traj[-1,1], s=70, marker="s", zorder=2.7)
+        x0, y0 = traj[0,0], traj[0,1]
+        x1, y1 = traj[-1,0], traj[-1,1]
+
+        ax_xy.plot(traj[:,0], traj[:,1], lw=1.8, label=rx_labels[i], zorder=2.2)
+        ax_xy.scatter(x0, y0, s=70, marker="o", zorder=2.8)
+        ax_xy.scatter(x1, y1, s=70, marker="s", zorder=2.8)
+
+        # etiqueta “UEi” al lado del punto inicial (ligero desplazamiento para no tapar)
+        ax_xy.text(x0 + 0.6, y0 + 0.6, rx_labels[i], fontsize=9, weight="bold",
+                   alpha=0.95, zorder=3)
+
         for k in range(0, T-1, step_stride):
             dx = traj[k+1,0]-traj[k,0]; dy = traj[k+1,1]-traj[k,1]
             ax_xy.arrow(traj[k,0], traj[k,1], dx, dy, length_includes_head=True,
@@ -281,34 +295,39 @@ def plot_trajectories_xy_xz(tracks: dict, out_path: Path, title_prefix="Trayecto
             for k in range(0, T, step_stride):
                 ax_xy.text(traj[k,0], traj[k,1], str(steps[k]), fontsize=7, alpha=0.85)
 
-    # No pongas leyenda dentro del eje
-    # ax_xy.legend(...)
-
     # ===== XZ =====
     ax_xz.set_title("Perfil XZ", pad=10)
     ax_xz.set_xlabel("X [m]"); ax_xz.set_ylabel("Z [m]")
-    ax_xz.grid(True, ls="--", alpha=0.35)
-    ax_xz.set_axisbelow(True)
+    ax_xz.grid(True, ls="--", alpha=0.35); ax_xz.set_axisbelow(True)
 
+    # Drone con inicio/fin
     ax_xz.plot(drone[:,0], drone[:,2], lw=2.0, label="Drone")
     ax_xz.scatter(drone[0,0], drone[0,2], s=90, marker="^")
     ax_xz.scatter(drone[-1,0], drone[-1,2], s=90, marker=">")
+
+    # UEs en XZ con inicio/fin + etiqueta cerca del inicio
     for i in range(N):
         traj = ues[:, i, :]
-        ax_xz.plot(traj[:,0], traj[:,2], lw=1.4, label=f"UE{i}")
+        x0, z0 = traj[0,0], traj[0,2]
+        x1, z1 = traj[-1,0], traj[-1,2]
+
+        ax_xz.plot(traj[:,0], traj[:,2], lw=1.4, label=rx_labels[i])
+        ax_xz.scatter(x0, z0, s=60, marker="o")  # inicio
+        ax_xz.scatter(x1, z1, s=60, marker="s")  # fin
+
+        # etiqueta en XZ al lado del punto inicial (desplazada en Z)
+        ax_xz.text(x0 + 0.6, z0 + 0.6, rx_labels[i], fontsize=8.5, alpha=0.95)
 
     # ===== Leyenda global afuera (derecha) =====
     handles, labels = [], []
     for ax in (ax_xy, ax_xz):
         h, l = ax.get_legend_handles_labels()
         handles += h; labels += l
-    # quita duplicados manteniendo orden
     seen=set(); H=[]; L=[]
     for h,l in zip(handles, labels):
         if l not in seen:
             H.append(h); L.append(l); seen.add(l)
 
-    # Colócala fuera, centrada a la derecha
     fig.legend(H, L, loc="center left", bbox_to_anchor=(0.82, 0.5),
                frameon=False, title="Leyenda", borderaxespad=0.0)
 

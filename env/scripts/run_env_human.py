@@ -61,7 +61,6 @@ if __name__ == "__main__":
 
         
 
-        
     #time.sleep(20)  # para ver mejor la animación
     env.close()
 
