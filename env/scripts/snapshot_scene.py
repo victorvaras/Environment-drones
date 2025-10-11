@@ -20,7 +20,7 @@ RX_POSITIONS = [
 
 if __name__ == "__main__":
     rt = SionnaRT(
-        scene_name="santiago.xml",  # escena integrada "munich"
+        scene_name="simple_street_canyon_with_cars",  # escena integrada "munich"
         antenna_mode="SECTOR3_3GPP",  # modo de antena: "ISO", "SECTOR3_3GPP"
         
     )
@@ -28,7 +28,7 @@ if __name__ == "__main__":
     rt.attach_receivers(np.array(RX_POSITIONS, dtype=float))
 
     # Mapa de calor de cobertura:
-    rt.render_scene_to_file(filename="santiago_cobertura_pruebas.png", with_radio_map=True)
+    rt.render_scene_to_file(filename="pruebas_antenas.png", with_radio_map=True)
 """
 
 if __name__ == "__main__":

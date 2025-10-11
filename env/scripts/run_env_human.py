@@ -58,7 +58,7 @@ if __name__ == "__main__":
     count = 0
     while not (done or trunc):
         a = [0, 0, 0]
-        b = np.random.uniform(-2, 2, size = (3,)) #Movimiento aleatorio
+        b = [0, 0, 0]
         obs, rew, done, trunc, info = env.step(a, b)
 
         #time.sleep(1)  # para ver mejor la animación
