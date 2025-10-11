@@ -29,7 +29,9 @@ from matplotlib.lines import Line2D
 from math import ceil
 
 # Desplazamientos y estilos por frecuencia para evitar solapamiento
-_X_OFFSETS = [-0.12, -0.04, 0.04, 0.12, 0.20, -0.20]  # se cicla si hay >6 freqs
+_X_OFFSETS = [-0.12, -0.04, 0.04, 0.12, 0.20, -0.20]  
+_Y_OFFSETS = np.array([-3, -2, -1, 0.0, 1.0, 2, 3])  
+
 _MARKERS   = ["o", "s", "D", "^", "v", "P"]
 _LINESTY   = ["-", "--", "-.", ":", "-", "--"]
 
@@ -45,13 +47,15 @@ RX_POSITIONS = [
     #(-50.0, 0.0, 1.5),
     (20.0, -30.0, 1.5),
     (20.0, 0.0, 1.5),
-    (-20.0, 0.0, 1.5),
-    #(0, 0, 1.5),
+    (-10.0, 0.0, 1.5),
+    (0, 0, 1.5),
     #(-1.0, 0.0, 1.5),
     #(0.0,   30.0, 1.5),
     #(20.0,  -30.0, 1.5),
     (80.0,   40.0, 1.5),
-    (50.0,    0.0, 1.5),
+    (-70.0,    35.0, 1.5),
+    #(-70.0,    -44.0, 1.5),
+    (0.0,    -44.0, 1.5),
     #(90, -55, 1.5),
 ]
 MAX_STEPS = 50
@@ -817,32 +821,72 @@ def plot_all_ues_prx_by_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir: Pat
 
 
 # ===== 2) SINR con todos los UEs =====
-def plot_all_ues_sinr_by_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir: Path):
+def plot_all_ues_sinr_by_freq(
+    df_all: pd.DataFrame,
+    freq_mhz: float,
+    out_dir: Path,
+    sep_x: bool = True,            # separación horizontal
+    sep_y: bool = True,           # separación vertical (jitter)
+    y_base: float = 0.10,          # amplitud del jitter en dB
+    legend_outside: bool = True
+):
     df_f = df_all[np.isclose(df_all["freq_mhz"], freq_mhz)].copy()
     if df_f.empty:
         print(f"[WARN] No hay datos para {freq_mhz} MHz")
         return
-    ue_ids, _ = _ue_labels(df_f)
-    colors = _palette(len(ue_ids))
-    xoffs  = _build_offsets(len(ue_ids), base=0.10)
+
+    # UEs y colores
+    ue_ids = sorted(df_f["ue_id"].dropna().astype(int).unique().tolist())
+    colors = _palette(len(ue_ids)) if "_palette" in globals() else plt.cm.tab10.colors
 
     fig, ax = plt.subplots(figsize=(11.5, 6.2))
     all_vals = []
 
-    for c, ue, xo in zip(colors, ue_ids, xoffs):
+    for j, (ue, c) in enumerate(zip(ue_ids, colors)):
         dfx = df_f[df_f["ue_id"] == ue].sort_values("step")
-        x   = dfx["step"].to_numpy(float) + xo
-        y   = dfx["sinr_eff_db"].to_numpy(float)
-        ax.plot(x, y, color=c, marker="o", linestyle="-", linewidth=1.8, label=f"UE{ue}")
+        x = dfx["step"].to_numpy(float)
+        y = dfx["sinr_eff_db"].to_numpy(float)
+
+        # offsets “simples” al estilo de tu otra función
+        xo = _X_OFFSETS[j % len(_X_OFFSETS)] if sep_x else 0.0
+        yo = (_Y_OFFSETS[j % len(_Y_OFFSETS)] * y_base) if sep_y else 0.0
+
+        # Línea y marcadores ya separados (simple y directo)
+        ax.plot(
+            x + xo, y + yo,
+            color=c, marker="o", linestyle="-", linewidth=1.8, markersize=5.5,
+            label=f"UE{ue}"
+        )
         all_vals.append(y)
 
     ax.set_title(f"SINR (dB) por step — {freq_mhz:.0f} MHz", pad=10)
-    ax.set_xlabel("Step"); ax.set_ylabel("SINR (dB)")
-    _axis_format_db(ax)
-    _pad_ylim(ax, all_vals)
-    _legend_outside(ax, title="UEs")
+    ax.set_xlabel("Step")
+    ax.set_ylabel("SINR (dB)")
+
+    if "_axis_format_db" in globals():
+        _axis_format_db(ax)
+    else:
+        ax.grid(True, linestyle="--", alpha=0.35)
+        ax.set_axisbelow(True)
+
+    # Auto-límites con padding
+    if any(len(v) > 0 for v in all_vals):
+        flat = np.concatenate([v[~np.isnan(v)] for v in all_vals if v.size > 0]) if len(all_vals) else np.array([])
+        if flat.size:
+            y_min, y_max = np.nanmin(flat), np.nanmax(flat)
+            pad = max(0.05, 0.08 * (y_max - y_min if y_max > y_min else 1.0))
+            ax.set_ylim(y_min - pad, y_max + pad)
+
+    # Leyenda
+    if legend_outside:
+        fig.subplots_adjust(right=0.82, top=0.90, left=0.10, bottom=0.12)
+        _legend_outside(ax, title="UEs") if "_legend_outside" in globals() else ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False)
+    else:
+        ax.legend(frameon=False)
+
     out = out_dir / f"ALL_UEs_SINR_{int(freq_mhz)}MHz.png"
-    fig.savefig(out, dpi=180, bbox_inches="tight"); plt.close(fig)
+    fig.savefig(out, dpi=180, bbox_inches="tight")
+    plt.close(fig)
 
 # ===== 3) SE combinado (Shannon vs SE-LA) con todos los UEs =====
 def plot_all_ues_se_combined_by_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir: Path):
@@ -971,7 +1015,7 @@ def main():
 
 
     # plots métricas
-    plot_all_metrics_combined(df_all, OUT_DIR)
+    #plot_all_metrics_combined(df_all, OUT_DIR)
 
 
     #plot_metric_per_ue(df_all, metric="prx_dbm",       ylabel="PRx (dBm)",            out_dir=OUT_DIR)

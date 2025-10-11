@@ -121,8 +121,6 @@ class SionnaRT:
                  # --- RF / ruido ---
                  frequency_mhz: float = 3500.0,   # Frecuencia portadora [MHz]
                  tx_power_dbm: float = 40.0,      # Potencia TOTAL objetivo [dBm] (se reparte si hay sectores)
-                 
-                 bandwidth_hz: float = 18_000_000,      # Ancho de banda de ruido térmico [Hz]
 
                  # --- escena: nombre integrado o ruta a XML/carpeta ---
                  scene_name: str = "munich",
@@ -141,14 +139,14 @@ class SionnaRT:
                  rx_array_v_spacing: float = 0.5,
                  rx_array_h_spacing: float = 0.5,
                  rx_array_pattern: str = "iso",
-                 rx_array_polarization: str = "V",
+                 rx_array_polarization: str = "H",
 
                  # --- pose inicial del transmisor ---
                  tx_initial_position: tuple[float, float, float] = (0.0, 0.0, 10.0), # [m]
                  tx_orientation_deg: tuple[float, float, float] = (0.0, -90.0, 0.0), # [°] yaw,pitch,roll
 
                  # --- control del trazador de caminos (PathSolver) ---
-                 max_depth: int = 5,              # Nº máx. de interacciones por camino
+                 max_depth: int = 2,              # Nº máx. de interacciones por camino
                  los: bool = True,                # Considerar Line-of-Sight
                  specular_reflection: bool = True,# Reflexiones especulares (reflexiones tipo espejo)
                  diffuse_reflection: bool = True, # Reflexiones difusas, por superficies rugosas (muy costoso, realista)
@@ -169,6 +167,7 @@ class SionnaRT:
                 num_ut_ant: int = 1,            # número de antenas por usuario
                 num_bs: int = 1,                # número de estaciones base                
                 subcarrier_spacing: float = 30e3,
+                temperatura: int = 294        # temperatura en K (para cálculo de ruido térmico) 21°C = 294K
                ):
 
         # --- Modo ---
@@ -176,8 +175,7 @@ class SionnaRT:
 
         # --- RF / ruido ---
         self.freq_hz = frequency_mhz * 1e6
-        self.tx_power_dbm_total = tx_power_dbm     
-        self.bandwidth_hz = bandwidth_hz
+        self.tx_power_dbm_total = tx_power_dbm
 
         # --- escena / antenas ---
         self.scene_name = scene_name
@@ -232,6 +230,7 @@ class SionnaRT:
         self.num_ut_ant = num_ut_ant
         self.num_bs = num_bs
         self.subcarrier_spacing = subcarrier_spacing
+        self.temperatura = temperatura
 
 
 
@@ -545,10 +544,12 @@ class SionnaRT:
         Ejecuta un step del sistema usando Sionna SYS.
         Calcula y devuelve métricas de bloques por step y acumuladas.
         """
-        # --- Ruido (potencia de ruido según BW efectiva) ---
-        # --- Ruido por subportadora en dBm (FIJO razonable) ---
-        no_dbm_sc = tf.constant(-129.0, tf.float32)            # 30 kHz típico
-        no = tf.pow(10.0, no_dbm_sc/10.0) / 1e3                # -> Watts por subportadora
+ 
+
+        temperatura = tf.constant(self.temperatura, tf.float32)
+        subcarrier_spacing = tf.constant(self.subcarrier_spacing, tf.float32)
+
+        no = BOLTZMANN_CONSTANT * temperatura * subcarrier_spacing  # Watts por subportadora
         EPS_NO = tf.constant(1e-18, tf.float32)
         no = tf.maximum(no, EPS_NO)
 
@@ -567,13 +568,11 @@ class SionnaRT:
         # Reordenar a lo que espera el scheduler
         rate_achievable_est = tf.transpose(rate, [1, 2, 3, 0])  # -> [num_bs, T, F, num_ut]
 
-
-        # --- Scheduler (PF) ---
-        # is_scheduled: [num_bs, num_ofdm_symbols, num_subcarriers, num_ut, num_streams_per_ut]
-        is_scheduled = self.scheduler(num_decoded_bits, rate_achievable_est)
+        
 
         # REs asignados por BS y UT: [num_bs, num_ut]
-        num_allocated_re = tf.reduce_sum(tf.cast(is_scheduled, tf.int32), axis=[ 1, 2, 4])
+        allocation_mask = self._build_ofdma_equal_mask_rr_tf()
+        num_allocated_re = tf.reduce_sum(tf.cast(allocation_mask, tf.int32), axis=[ 1, 2, 4])
 
         # --- Pathloss medio por UT (heurístico) ---
         pathloss_per_ut = tf.reduce_mean(1.0 / channel_gain, axis=[1, 3, 4, 5])  # [num_ut, num_bs]
@@ -588,7 +587,7 @@ class SionnaRT:
         tx_power_per_ut, _ = downlink_fair_power_control(
             pathloss_per_ut, no, num_allocated_re,
             bs_max_power_dbm=self.tx_power_dbm_total,
-            guaranteed_power_ratio=0.5,
+            guaranteed_power_ratio=tf.maximum(0.5, 1.0/tf.cast(self.num_ut, tf.float32)),
             fairness=0
         )
         tx_power_per_ut = tf.nn.relu(tx_power_per_ut)  # no negativos
@@ -597,7 +596,7 @@ class SionnaRT:
         # --- Reparto de potencia en REs asignados ---
         tx_power = spread_across_subcarriers(
             tf.expand_dims(tx_power_per_ut, axis=-2),  # [num_bs, num_ut, 1]
-            is_scheduled,
+            allocation_mask,
             num_tx=self.num_bs
         )
 
@@ -847,6 +846,74 @@ class SionnaRT:
         h_tf = tf.convert_to_tensor(h_freq_np, dtype=tf.complex64)
         
         self.current_cfr_for_current_step = h_tf
+
+
+    def _build_ofdma_equal_mask_rr_tf(self):
+        """
+        OFDMA Equal Frequency Partitioner (RR intra-step).
+        Devuelve una máscara booleana de asignación de REs:
+            shape: [num_bs, T, F, num_ut, num_streams_per_ut]
+        Propósito:
+        - Particionar F subportadoras equitativamente entre U UEs en cada símbolo t.
+        - Repartir el residuo (F % U) dentro del mismo step mediante Round-Robin por símbolo.
+        - Activar exclusivamente el stream 0 para mantener ortogonalidad estricta (sin MU-MIMO).
+
+        """
+        # Alias locales en int32
+        num_bs = tf.cast(self.num_bs, tf.int32)
+        T      = tf.cast(self.num_ofdm_symbols, tf.int32)
+        F      = tf.cast(self.num_subcarriers, tf.int32)
+        U      = tf.cast(self.num_ut, tf.int32)
+
+        # Cálculo base y residuo
+        base = F // U          # subportadoras por UE (parte entera)
+        rem  = F %  U          # cuántos UEs reciben +1 en este símbolo
+
+        # order_mat[t, k] = índice de UE que recibe el k-ésimo bloque en el símbolo t
+        t_range   = tf.range(T, dtype=tf.int32)                           # [T]
+        u_range   = tf.range(U, dtype=tf.int32)                           # [U]
+        order_mat = (tf.expand_dims(t_range, 1) + tf.expand_dims(u_range, 0)) % U  # [T, U]
+
+        # Índices de subportadora
+        f_range = tf.range(F, dtype=tf.int32)                             # [F]
+        cut     = (base + 1) * rem                                        # primer tramo (rem bloques de tamaño base+1)
+
+        # Tramos grande/pequeño
+        mask_big   = f_range <  cut                                        # [F] bool
+        mask_small = tf.logical_not(mask_big)                              # [F] bool
+
+        # Índices de bloque dentro de cada tramo
+        # Evita /0 cuando base==0 con tf.maximum(base,1)
+        block_idx_big   = tf.where(mask_big,  f_range // tf.maximum(base + 1, 1), tf.zeros_like(f_range))
+        block_idx_small = tf.where(mask_small,(f_range - cut) // tf.maximum(base, 1), tf.zeros_like(f_range))
+
+        # Mapear (t,f) -> UE usando order_mat
+        # ue_big = order_mat[t, block_idx_big[f]]
+        ue_big   = tf.gather(order_mat, block_idx_big, axis=1)             # [T, F]
+        # ue_small = order_mat[t, rem + block_idx_small[f]]
+        ue_small = tf.gather(order_mat, rem + block_idx_small, axis=1)     # [T, F]
+
+        # Selección por tramo con broadcasting de la máscara [F] -> [1,F] sobre T
+        ue_idx_t_f = tf.where(tf.expand_dims(mask_big, 0), ue_big, ue_small)  # [T, F]
+
+        # One-hot numérico y cast a bool
+        onehot_ue_num = tf.one_hot(ue_idx_t_f, depth=U, dtype=tf.int32)    # [T, F, U], int32
+        onehot_ue = tf.cast(onehot_ue_num, tf.bool)                        # [T, F, U], bool
+
+        # Expandir a [num_bs, T, F, U]
+        onehot_ue = tf.expand_dims(onehot_ue, axis=0)                      # [1, T, F, U]
+        onehot_ue = tf.tile(onehot_ue, [num_bs, 1, 1, 1])                  # [num_bs, T, F, U]
+
+        # Activar solo stream 0
+        num_streams = tf.cast(self.num_ut_ant, tf.int32)                   # usa tu valor actual
+        stream0 = tf.one_hot(0, depth=num_streams, dtype=tf.int32)         # [S] numérico
+        stream0 = tf.cast(stream0, tf.bool)                                # [S] bool
+        stream0 = tf.reshape(stream0, [1, 1, 1, 1, num_streams])           # [1,1,1,1,S]
+        stream0 = tf.tile(stream0, [num_bs, T, F, U, 1])                   # [num_bs,T,F,U,S]
+
+        allocation_mask = tf.expand_dims(onehot_ue, axis=-1) & stream0        # [num_bs, T, F, U, S] bool
+        return allocation_mask
+
 
 
     # ---- Métricas adicionales Calculo teorico de Pr----
