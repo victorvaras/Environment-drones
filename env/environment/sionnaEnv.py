@@ -320,20 +320,22 @@ class SionnaRT:
                 tx_pol = "VH"  # dual, más cercano a 5G
 
         self.scene.tx_array = PlanarArray(
-            num_rows=self.tx_array_rows, num_cols=self.tx_array_cols,
+            num_rows=self.tx_array_rows, 
+            num_cols=self.tx_array_cols,
             vertical_spacing=self.tx_array_v_spacing,
             horizontal_spacing=self.tx_array_h_spacing,
             pattern=tx_pattern, polarization=tx_pol
         )
         self.scene.rx_array = PlanarArray(
-            num_rows=self.rx_array_rows, num_cols=self.rx_array_cols,
+            num_rows=self.rx_array_rows, 
+            num_cols=self.rx_array_cols,
             vertical_spacing=self.rx_array_v_spacing,
             horizontal_spacing=self.rx_array_h_spacing,
             pattern=self.rx_array_pattern, polarization=self.rx_array_polarization
         )
 
         # Precoder/combiner off si existen
-        if hasattr(self.scene, "transmit_precoder"):
+        if hasattr(self.scene, "transmit_precoder"):    
             self.scene.transmit_precoder = None
         if hasattr(self.scene, "receive_combiner"):
             self.scene.receive_combiner = None
@@ -373,9 +375,6 @@ class SionnaRT:
         except Exception as e:
             raise ValueError("tx_orientation_deg debe ser [yaw, pitch, roll] en grados") from e
 
-        # Si no definiste un downtilt, usamos -10° (negativo = inclinar hacia el suelo)
-        # ajusta a tu convención si tu motor usa el signo inverso.
-        tx_downtilt_deg = getattr(self, "tx_downtilt_deg", -10.0)
 
         # Crea el único TX
         tx = Transmitter(
@@ -383,28 +382,8 @@ class SionnaRT:
             position=list(self.tx_initial_position),
             display_radius=2
         )
-
-        mode = str(self.antenna_mode).upper().strip()
-
-        if mode == "ISO":
-            # Un solo TX, toda la potencia, orientación base
-            tx.orientation = [_norm_deg(base_yaw), float(base_pitch), float(base_roll)]
-            tx.power_dbm = float(self.tx_power_dbm_total)
-
-        elif mode in ("SECTOR3_3GPP", "SECTOR3", "3GPP"):
-            # Un solo TX, patrón 3GPP ya viene dado por scene.tx_array en build_scene.
-            # Usamos downtilt (pitch negativo) para 'apuntar hacia abajo'.
-            # Nota: si tu convención es opuesta, cambia a +abs(tx_downtilt_deg).
-            pitch = float(base_pitch) + float(tx_downtilt_deg)  # típico: base 0 + (-10) = -10°
-            tx.orientation = [_norm_deg(base_yaw), pitch, float(base_roll)]
-            tx.power_dbm = float(self.tx_power_dbm_total)  # sin reparto, 1 solo sector físico
-
-            # (Opcional) si quieres permitir un azimut distinto para el lóbulo principal:
-            # desired_azimuth = getattr(self, "tx_azimuth_deg", base_yaw)
-            # tx.orientation[0] = _norm_deg(desired_azimuth)
-
-        else:
-            raise ValueError(f"antenna_mode inválido: {self.antenna_mode}")
+        tx.orientation = [_norm_deg(base_yaw), float(base_pitch), float(base_roll)]
+        tx.power_dbm = float(self.tx_power_dbm_total)
 
         # Añade a escena y guarda referencias
         self.scene.add(tx)
@@ -776,6 +755,13 @@ class SionnaRT:
         # ---------- Métricas por-UE ----------
         ue_metrics = []
         prx_list = self.compute_prx_dbm()
+        prx_theo_list = self.compute_prx_dbm_theoretical( 
+            gamma=getattr(self, "pathloss_gamma", 1.8),
+            d0=1.0,
+            Gt_dBi=getattr(self, "tx_gain_dbi", 0.0),
+            Gr_dBi=getattr(self, "rx_gain_dbi", 0.0),
+        )
+
         for i in range(self.num_ut):
             se_la_i       = float(se_la_np[i])
             se_shannon_i  = float(se_shannon_np[i])
@@ -788,6 +774,7 @@ class SionnaRT:
                 "ue_id": i, #
                 "sinr_eff_db": float(sinr_eff_db_true_np[i]), #
                 "prx_dbm": float(prx_list[i]), 
+                "prx_dbm_theo": float(prx_theo_list[i]), 
                 "se_la": float(se_la_np[i]), #
                 "se_shannon": float(se_shannon_np[i]), #
                 "se_gap_pct": se_gap_pct_i, #
@@ -861,6 +848,43 @@ class SionnaRT:
         
         self.current_cfr_for_current_step = h_tf
 
+
+    # ---- Métricas adicionales Calculo teorico de Pr----
+
+
+    # --- PRx teórico (Goldsmith 2.40): Pt_dBm + K_dB - 10*gamma*log10(d/d0) ---
+    def compute_prx_dbm_theoretical(self,
+                                    gamma: float = None,
+                                    d0: float = 1.0,
+                                    Gt_dBi: float = None,
+                                    Gr_dBi: float = None) -> np.ndarray:
+        """
+        PRx teórico (modelo log-distancia):
+            PRx[dBm] = Pt[dBm] + K[dB] - 10*γ*log10(d/d0)
+        con K[dB] = 20*log10(λ/(4π d0)) + Gt + Gr
+        """
+        # parámetros por defecto desde el sistema si existen
+        if gamma is None:
+            gamma = getattr(self, "pathloss_gamma", 2.0)
+        if Gt_dBi is None:
+            Gt_dBi = float(getattr(self, "tx_gain_dbi", 0.0))
+        if Gr_dBi is None:
+            Gr_dBi = float(getattr(self, "rx_gain_dbi", 0.0))
+
+        c = 299_792_458.0
+        lam = c / float(self.freq_hz)
+
+        K_dB = 20.0 * math.log10(lam / (4.0 * math.pi * d0)) + Gt_dBi + Gr_dBi
+        Pt_dBm = float(self._total_tx_power_dbm())
+
+        # posiciones actuales
+        tx = np.array(self.txs[0].position, dtype=float).reshape(3)
+        rx = np.array([list(r.position) for r in self.rx_list], dtype=float).reshape(-1, 3)
+        d = np.linalg.norm(rx - tx, axis=1)
+
+        ratio = np.maximum(d / float(d0), 1e-12)  # evita log10(0)
+        prx_dbm = Pt_dBm + K_dB - 10.0 * float(gamma) * np.log10(ratio)
+        return np.asarray(prx_dbm, dtype=float).reshape(-1)
 
 
     

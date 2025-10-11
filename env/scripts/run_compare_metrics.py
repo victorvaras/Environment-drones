@@ -25,6 +25,8 @@ import pandas as pd
 from datetime import datetime
 from matplotlib.ticker import ScalarFormatter, MaxNLocator
 from matplotlib.gridspec import GridSpec
+from matplotlib.lines import Line2D
+from math import ceil
 
 # Desplazamientos y estilos por frecuencia para evitar solapamiento
 _X_OFFSETS = [-0.12, -0.04, 0.04, 0.12, 0.20, -0.20]  # se cicla si hay >6 freqs
@@ -42,25 +44,26 @@ DRONE_START = (0.0, 0.0, 10.0)
 RX_POSITIONS = [
     #(-50.0, 0.0, 1.5),
     (20.0, -30.0, 1.5),
-    (10.0, 0.0, 1.5),
-    (-10.0, 0.0, 1.5),
-    (0, 0, 1.5),
+    (20.0, 0.0, 1.5),
+    (-20.0, 0.0, 1.5),
+    #(0, 0, 1.5),
     #(-1.0, 0.0, 1.5),
     #(0.0,   30.0, 1.5),
     #(20.0,  -30.0, 1.5),
-    #(80.0,   40.0, 1.5),
-    #(50.0,    0.0, 1.5),
+    (80.0,   40.0, 1.5),
+    (50.0,    0.0, 1.5),
     #(90, -55, 1.5),
 ]
 MAX_STEPS = 50
 
 # Compara dos frecuencias (en MHz). Cambia a lo que necesites.
-FREQS_MHZ = [3500.0, 28000]
+FREQS_MHZ = [3500.0] #28000
 FREQ_LABELS = [f"{f:.0f} MHz" for f in FREQS_MHZ]
 
 # Carpeta de salida con timestamp
 RUN_TAG = datetime.now().strftime("%Y%m%d-%H%M%S")
-OUT_DIR = Path(project_root) / "outputs" / f"compare_metrics_{RUN_TAG}"
+#OUT_DIR = Path(project_root) / "outputs" / f"compare_metrics_{RUN_TAG}"
+OUT_DIR = Path(project_root) / "outputs-pruebas" / f"compare_metrics_{RUN_TAG}"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 import numpy as np
@@ -174,7 +177,7 @@ def run_episode(freq_mhz: float) -> dict:
         max_steps=MAX_STEPS,
         drone_start=DRONE_START,
         rx_positions=RX_POSITIONS if RX_POSITIONS else None,
-        antenna_mode="SECTOR3_3GPP",
+        antenna_mode="SECTOR3_3GPP",  # "ISO" o "SECTOR3_3GPP"
         frequency_mhz=freq_mhz,
     )
 
@@ -360,6 +363,7 @@ def to_dataframe(run_dict: dict) -> pd.DataFrame:
                 ue_id = m.get("ue_id", i)
                 sinr = m.get("sinr_eff_db", np.nan)
                 prx  = m.get("prx_dbm", np.nan)
+                prx_theo = m.get("prx_dbm_theo", np.nan)
                 se_la = m.get("se_la", np.nan)
                 se_sh = m.get("se_shannon", np.nan)
                 se_gap = m.get("se_gap_pct", np.nan)
@@ -377,6 +381,7 @@ def to_dataframe(run_dict: dict) -> pd.DataFrame:
                 "ue_id": ue_id,
                 "sinr_eff_db": float(sinr) if sinr is not None else np.nan,
                 "prx_dbm": float(prx) if prx is not None else np.nan,
+                "prx_dbm_theo": float(prx_theo) if prx_theo is not None else np.nan,
                 "se_la": float(se_la) if se_la is not None else np.nan,
                 "se_shannon": float(se_sh) if se_sh is not None else np.nan,
                 "se_gap_pct": float(se_gap) if se_gap is not None else np.nan,
@@ -388,61 +393,102 @@ def to_dataframe(run_dict: dict) -> pd.DataFrame:
     return df
 
 
-def plot_metric_per_ue(df_all: pd.DataFrame, metric: str, ylabel: str, out_dir: Path):
+
+def plot_metric_per_ue(df_all: pd.DataFrame, metric: str, ylabel: str, out_dir: Path,
+                       legend_outside: bool = True):
     """
-    (Sigue existiendo por si quieres PNGs individuales.)
-    Con corrección de formato de ejes y anti-solape (offset en X por frecuencia).
+    Un PNG por UE para la métrica indicada (p. ej., 'prx_dbm', 'sinr_eff_db', etc.).
+    Si metric == 'prx_dbm', se añade la curva teórica 'prx_dbm_theo' como cota superior.
     """
     ue_ids = sorted(df_all["ue_id"].dropna().astype(int).unique().tolist())
-    freqs = sorted(df_all["freq_mhz"].dropna().unique().tolist())
+    freqs  = sorted(df_all["freq_mhz"].dropna().unique().tolist())
     label_for = {f: f"{f:.0f} MHz" for f in freqs}
 
+    # Título legible por métrica
+    nice_title = {
+        "prx_dbm": "PRx (dBm)",
+        "sinr_eff_db": "SINR (dB)",
+        "se_la": "SE-LA (b/s/Hz)",
+        "se_shannon": "SE Shannon (b/s/Hz)",
+        "tbler_running": "TBLER running",
+        "tbler_step": "TBLER (por step)",
+    }.get(metric, metric)
+
     for ue in ue_ids:
-        fig = plt.figure(figsize=(9.5, 5.5))
+        fig = plt.figure(figsize=(9.8, 5.6))
         ax = plt.gca()
 
         yvals_all = []
+
         for j, f in enumerate(freqs):
             dfx = df_all[(df_all["ue_id"] == ue) & (df_all["freq_mhz"] == f)].sort_values("step")
-            x = dfx["step"].to_numpy(dtype=float)
-            x = x + _X_OFFSETS[j % len(_X_OFFSETS)]  # << anti-solape
-            y = dfx[metric].to_numpy(dtype=float)
-            yvals_all.append(y[~np.isnan(y)])
+            x   = dfx["step"].to_numpy(dtype=float) + _X_OFFSETS[j % len(_X_OFFSETS)]
+            y   = dfx[metric].to_numpy(dtype=float)
 
-            ax.plot(
+            # curva medida
+            line_meas, = ax.plot(
                 x, y,
                 marker=_MARKERS[j % len(_MARKERS)],
-                linewidth=1.6,
+                linewidth=1.8,
                 linestyle=_LINESTY[j % len(_LINESTY)],
+                markersize=5.5,
                 label=label_for[f],
             )
+            yvals_all.append(y[~np.isnan(y)])
 
-        ax.set_title(f"{metric} por step (UE {ue})")
+            # --- cota teórica para PRx ---
+            if metric == "prx_dbm" and "prx_dbm_theo" in dfx.columns:
+                y_th = dfx["prx_dbm_theo"].to_numpy(dtype=float)
+                # usa el mismo color que la curva medida para asociarlas visualmente
+                color_meas = line_meas.get_color()
+                ax.plot(
+                    x, y_th,
+                    linestyle=":",
+                    linewidth=2.0,
+                    color=color_meas,
+                    label=f"{label_for[f]} · Teórico",
+                )
+                yvals_all.append(y_th[~np.isnan(y_th)])
+
+        # títulos/etiquetas
+        ax.set_title(f"{nice_title} por step — UE {ue}", pad=10)
         ax.set_xlabel("Step")
         ax.set_ylabel(ylabel)
-        _axis_format_db(ax)
 
-        # Rango Y razonable (si hay datos)
-        flat = np.concatenate([v for v in yvals_all if v.size > 0]) if any(len(v) > 0 for v in yvals_all) else np.array([])
-        if flat.size > 0:
+        # formato dB/dBm si aplica
+        if metric.lower().endswith("db") or metric in ("prx_dbm", "sinr_eff_db"):
+            _axis_format_db(ax)
+        else:
+            ax.grid(True, linestyle="--", alpha=0.35)
+            ax.set_axisbelow(True)
+
+        # auto-límites con padding si hay datos
+        flat = (np.concatenate([v for v in yvals_all if v.size > 0])
+                if any(len(v) > 0 for v in yvals_all) else np.array([]))
+        if flat.size:
             y_min, y_max = np.nanmin(flat), np.nanmax(flat)
-            pad = max(1.0, 0.06 * (y_max - y_min if y_max > y_min else 10))
+            pad = max(0.05, 0.08 * (y_max - y_min if y_max > y_min else 1.0))
             ax.set_ylim(y_min - pad, y_max + pad)
 
-        ax.legend()
-        fig.tight_layout()
+        # leyenda (afuera a la derecha por defecto)
+        if legend_outside:
+            fig.subplots_adjust(right=0.82, top=0.90, left=0.10, bottom=0.12)
+            ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False, title="Frecuencia")
+        else:
+            ax.legend(frameon=False)
 
         out_file = out_dir / f"{metric}_UE{ue}.png"
-        fig.savefig(out_file, dpi=160)
+        fig.savefig(out_file, dpi=180, bbox_inches="tight")
         plt.close(fig)
 
 
 def _axis_format_db(ax):
-    sf = ScalarFormatter(useMathText=False, useOffset=False)
+    sf = ScalarFormatter(useOffset=False)
     sf.set_scientific(False)
     ax.yaxis.set_major_formatter(sf)
     ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
     ax.grid(True, linestyle="--", alpha=0.35)
+    ax.set_axisbelow(True)
 
 
 def plot_all_metrics_combined(df_all: pd.DataFrame, out_dir: Path):
@@ -479,12 +525,22 @@ def plot_all_metrics_combined(df_all: pd.DataFrame, out_dir: Path):
             x = df_f["step"].to_numpy(dtype=float)
             x_off = x + _X_OFFSETS[j % len(_X_OFFSETS)]
 
-            # PRx
+            
+            # PRx (medido)
             y = df_f["prx_dbm"].to_numpy(dtype=float)
             ax_prx.plot(x_off, y, marker=_MARKERS[j % len(_MARKERS)],
                         linestyle=_LINESTY[j % len(_LINESTY)], linewidth=1.6,
                         label=label_for[f])
             y_collect["prx"].append(y[~np.isnan(y)])
+
+            # PRx TEÓRICO (cota)  <<<< NUEVO
+            y_th = df_f["prx_dbm_theo"].to_numpy(dtype=float)
+            ax_prx.plot(x_off, y_th,
+                        marker=None,
+                        linestyle=":",
+                        linewidth=2.0,
+                        label=f"{label_for[f]} · Teórico")
+            y_collect["prx"].append(y_th[~np.isnan(y_th)])
 
             # SINR
             y = df_f["sinr_eff_db"].to_numpy(dtype=float)
@@ -567,9 +623,9 @@ def plot_all_metrics_combined(df_all: pd.DataFrame, out_dir: Path):
 
 def plot_all_metrics_single_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir: Path):
     """
-    Una imagen por UE pero mostrando SOLO la frecuencia 'freq_mhz'.
-    Conserva el layout (SE con doble altura) y 'Step' en todos los subplots.
-    Sin offsets (no hacen falta con una sola frecuencia).
+    Una imagen por UE mostrando SOLO la frecuencia 'freq_mhz'.
+    PRx incluye la cota teórica (prx_dbm_theo) si está disponible.
+    Layout: SE con doble altura y 'Step' en todos los subplots.
     """
     df_f_all = df_all[np.isclose(df_all["freq_mhz"], freq_mhz)].copy()
     if df_f_all.empty:
@@ -578,6 +634,7 @@ def plot_all_metrics_single_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir:
 
     ue_ids = sorted(df_f_all["ue_id"].dropna().astype(int).unique().tolist())
     label = f"{freq_mhz:.0f} MHz"
+    has_prx_theo = "prx_dbm_theo" in df_f_all.columns
 
     for ue in ue_ids:
         fig = plt.figure(figsize=(13, 10))
@@ -592,52 +649,64 @@ def plot_all_metrics_single_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir:
         df_f = df_f_all[(df_f_all["ue_id"] == ue)].sort_values("step")
         x = df_f["step"].to_numpy(dtype=float)
 
-        # PRx
-        y = df_f["prx_dbm"].to_numpy(dtype=float)
-        ax_prx.plot(x, y, marker="o", linestyle="-", linewidth=1.8, label=label)
+        # ========= PRx =========
+        y_prx = df_f["prx_dbm"].to_numpy(dtype=float)
+        line_meas, = ax_prx.plot(x, y_prx, marker="o", linestyle="-", linewidth=1.8, label=label)
 
-        # SINR
+        # Cota teórica si existe
+        if has_prx_theo:
+            y_th = df_f["prx_dbm_theo"].to_numpy(dtype=float)
+            ax_prx.plot(x, y_th, linestyle=":", linewidth=2.0,
+                        color=line_meas.get_color(), label=f"{label} · Teórico")
+
+        # ========= SINR =========
         y = df_f["sinr_eff_db"].to_numpy(dtype=float)
         ax_sinr.plot(x, y, marker="o", linestyle="-", linewidth=1.8, label=label)
 
-        # SE combinado
+        # ========= SE combinado =========
         y_sh = df_f["se_shannon"].to_numpy(dtype=float)
         y_la = df_f["se_la"].to_numpy(dtype=float)
         ax_se.plot(x, y_sh, marker="o", linestyle="-",  linewidth=1.9, label=f"{label} · Shannon")
         ax_se.plot(x, y_la, marker="s", linestyle="--", linewidth=1.7, label=f"{label} · SE-LA")
 
-        # TBLER step
+        # ========= TBLER step =========
         y = df_f["tbler_step"].to_numpy(dtype=float)
         ax_tbl_s.plot(x, y, marker="o", linestyle="-", linewidth=1.8, label=label)
 
-        # TBLER running
+        # ========= TBLER running =========
         y = df_f["tbler_running"].to_numpy(dtype=float)
         ax_tbl_r.plot(x, y, marker="o", linestyle="-", linewidth=1.8, label=label)
 
-        # Títulos / labels / formato
-        ax_prx.set_title("PRx (dBm)");       ax_prx.set_ylabel("PRx (dBm)")
-        ax_sinr.set_title("SINR (dB)");      ax_sinr.set_ylabel("SINR (dB)")
+        # Títulos / labels / grilla
+        ax_prx.set_title("PRx (dBm)");            ax_prx.set_ylabel("PRx (dBm)")
+        ax_sinr.set_title("SINR (dB)");           ax_sinr.set_ylabel("SINR (dB)")
         ax_se.set_title("SE — Shannon (cota) vs SE-LA (real)"); ax_se.set_ylabel("SE (b/s/Hz)")
-        ax_tbl_s.set_title("TBLER (por step)"); ax_tbl_s.set_ylabel("TBLER")
-        ax_tbl_r.set_title("TBLER running");   ax_tbl_r.set_ylabel("TBLER")
+        ax_tbl_s.set_title("TBLER (por step)");   ax_tbl_s.set_ylabel("TBLER")
+        ax_tbl_r.set_title("TBLER running");      ax_tbl_r.set_ylabel("TBLER")
 
         for ax in [ax_prx, ax_sinr, ax_se, ax_tbl_s, ax_tbl_r]:
             ax.set_xlabel("Step")
             ax.grid(True, linestyle="--", alpha=0.35)
+            ax.set_axisbelow(True)
 
         _axis_format_db(ax_prx); _axis_format_db(ax_sinr)
 
         # Límites con padding
-        def _pad(ax, yvals):
-            yv = yvals[~np.isnan(yvals)]
-            if yv.size:
+        def _pad(ax, *arrays):
+            vals = []
+            for a in arrays:
+                if a is not None:
+                    a = a[~np.isnan(a)]
+                    if a.size: vals.append(a)
+            if vals:
+                yv = np.concatenate(vals)
                 y_min, y_max = np.min(yv), np.max(yv)
                 pad = max(0.05, 0.08 * (y_max - y_min if y_max > y_min else 1.0))
                 ax.set_ylim(y_min - pad, y_max + pad)
 
-        _pad(ax_prx,  df_f["prx_dbm"].to_numpy(dtype=float))
+        _pad(ax_prx,  y_prx, (df_f["prx_dbm_theo"].to_numpy(dtype=float) if has_prx_theo else None))
         _pad(ax_sinr, df_f["sinr_eff_db"].to_numpy(dtype=float))
-        _pad(ax_se,   np.concatenate([y_sh[~np.isnan(y_sh)], y_la[~np.isnan(y_la)]]))
+        _pad(ax_se,   y_sh, y_la)
         _pad(ax_tbl_s, df_f["tbler_step"].to_numpy(dtype=float))
         _pad(ax_tbl_r, df_f["tbler_running"].to_numpy(dtype=float))
 
@@ -650,6 +719,7 @@ def plot_all_metrics_single_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir:
         for h, l in zip(handles, labels):
             if l not in seen:
                 H.append(h); L.append(l); seen.add(l)
+
         fig.legend(H, L, loc="lower center", ncol=3, frameon=False, bbox_to_anchor=(0.5, 0.02))
 
         fig.suptitle(f"UE {ue} — freq: {label}", fontsize=14, y=0.995)
@@ -658,6 +728,229 @@ def plot_all_metrics_single_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir:
         out_file = out_dir / f"UE{ue}_all_metrics_{int(freq_mhz)}MHz.png"
         fig.savefig(out_file, dpi=180, bbox_inches="tight")
         plt.close(fig)
+
+
+
+
+# ===== Helpers nuevos/actualizados =====
+def _build_offsets(n: int, base=0.10) -> list[float]:
+    """Devuelve n offsets centrados en 0 para evitar solapes en X."""
+    if n <= 1:
+        return [0.0]
+    # ejemplo: n=5 -> [-0.20, -0.10, 0.00, 0.10, 0.20]
+    mid = (n - 1) / 2.0
+    return [ (i - mid) * base for i in range(n) ]
+
+def _ue_labels(df_freq):
+    ue_ids = sorted(df_freq["ue_id"].dropna().astype(int).unique().tolist())
+    return ue_ids, [f"UE{i}" for i in ue_ids]
+
+def _legend_outside(ax, title="Leyenda"):
+    fig = ax.figure
+    fig.subplots_adjust(right=0.82, top=0.90, left=0.10, bottom=0.12)
+    ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5),
+              frameon=False, title=title)
+
+def _palette(n):
+    # usa el ciclo de Matplotlib (suficiente y agradable)
+    # devolverá una lista de colores consistente para UEs
+    prop = plt.rcParams['axes.prop_cycle'].by_key().get('color', [])
+    if n <= len(prop):
+        return prop[:n]
+    # si faltan colores, repite ciclo (poco probable)
+    out = []
+    i = 0
+    while len(out) < n:
+        out.append(prop[i % len(prop)])
+        i += 1
+    return out
+
+def _pad_ylim(ax, arrays):
+    vals = []
+    for a in arrays:
+        if a is None: 
+            continue
+        a = np.asarray(a, float)
+        a = a[~np.isnan(a)]
+        if a.size:
+            vals.append(a)
+    if not vals:
+        return
+    y = np.concatenate(vals)
+    y_min, y_max = float(np.min(y)), float(np.max(y))
+    pad = max(0.05, 0.08 * (y_max - y_min if y_max > y_min else 1.0))
+    ax.set_ylim(y_min - pad, y_max + pad)
+
+# ===== 1) PRx con todos los UEs (opcional teórico) =====
+def plot_all_ues_prx_by_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir: Path,
+                             show_theoretical: bool = True):
+    df_f = df_all[np.isclose(df_all["freq_mhz"], freq_mhz)].copy()
+    if df_f.empty:
+        print(f"[WARN] No hay datos para {freq_mhz} MHz")
+        return
+    ue_ids, _ = _ue_labels(df_f)
+    colors = _palette(len(ue_ids))
+    xoffs  = _build_offsets(len(ue_ids), base=0.10)
+
+    fig, ax = plt.subplots(figsize=(11.5, 6.2))
+    all_vals = []
+
+    for c, ue, xo in zip(colors, ue_ids, xoffs):
+        dfx = df_f[df_f["ue_id"] == ue].sort_values("step")
+        x   = dfx["step"].to_numpy(float) + xo
+        y   = dfx["prx_dbm"].to_numpy(float)
+        ax.plot(x, y, color=c, marker="o", linestyle="-", linewidth=1.8, label=f"UE{ue}")
+        all_vals.append(y)
+
+        if show_theoretical and ("prx_dbm_theo" in dfx.columns):
+            y_th = dfx["prx_dbm_theo"].to_numpy(float)
+            ax.plot(x, y_th, color=c, linestyle=":", linewidth=2.0)  # misma tinta, punteado
+            all_vals.append(y_th)
+
+    ax.set_title(f"PRx (dBm) por step — {freq_mhz:.0f} MHz", pad=10)
+    ax.set_xlabel("Step"); ax.set_ylabel("PRx (dBm)")
+    _axis_format_db(ax)
+    _pad_ylim(ax, all_vals)
+    _legend_outside(ax, title="UEs (punteado = cota teórica)")
+    out = out_dir / f"ALL_UEs_PRx_{int(freq_mhz)}MHz.png"
+    fig.savefig(out, dpi=180, bbox_inches="tight"); plt.close(fig)
+
+
+# ===== 2) SINR con todos los UEs =====
+def plot_all_ues_sinr_by_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir: Path):
+    df_f = df_all[np.isclose(df_all["freq_mhz"], freq_mhz)].copy()
+    if df_f.empty:
+        print(f"[WARN] No hay datos para {freq_mhz} MHz")
+        return
+    ue_ids, _ = _ue_labels(df_f)
+    colors = _palette(len(ue_ids))
+    xoffs  = _build_offsets(len(ue_ids), base=0.10)
+
+    fig, ax = plt.subplots(figsize=(11.5, 6.2))
+    all_vals = []
+
+    for c, ue, xo in zip(colors, ue_ids, xoffs):
+        dfx = df_f[df_f["ue_id"] == ue].sort_values("step")
+        x   = dfx["step"].to_numpy(float) + xo
+        y   = dfx["sinr_eff_db"].to_numpy(float)
+        ax.plot(x, y, color=c, marker="o", linestyle="-", linewidth=1.8, label=f"UE{ue}")
+        all_vals.append(y)
+
+    ax.set_title(f"SINR (dB) por step — {freq_mhz:.0f} MHz", pad=10)
+    ax.set_xlabel("Step"); ax.set_ylabel("SINR (dB)")
+    _axis_format_db(ax)
+    _pad_ylim(ax, all_vals)
+    _legend_outside(ax, title="UEs")
+    out = out_dir / f"ALL_UEs_SINR_{int(freq_mhz)}MHz.png"
+    fig.savefig(out, dpi=180, bbox_inches="tight"); plt.close(fig)
+
+# ===== 3) SE combinado (Shannon vs SE-LA) con todos los UEs =====
+def plot_all_ues_se_combined_by_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir: Path):
+    df_f = df_all[np.isclose(df_all["freq_mhz"], freq_mhz)].copy()
+    if df_f.empty:
+        print(f"[WARN] No hay datos para {freq_mhz} MHz")
+        return
+    ue_ids, _ = _ue_labels(df_f)
+    colors = _palette(len(ue_ids))
+    xoffs  = _build_offsets(len(ue_ids), base=0.10)
+
+    fig, ax = plt.subplots(figsize=(11.5, 6.8))
+    all_vals = []
+
+    # color = UE ; estilo: sólido = Shannon, discontinuo = SE-LA
+    for c, ue, xo in zip(colors, ue_ids, xoffs):
+        dfx = df_f[df_f["ue_id"] == ue].sort_values("step")
+        x   = dfx["step"].to_numpy(float) + xo
+        ysh = dfx["se_shannon"].to_numpy(float)
+        yla = dfx["se_la"].to_numpy(float)
+
+        ax.plot(x, ysh, color=c, linestyle="-",  linewidth=1.9, label=f"UE{ue}")
+        ax.plot(x, yla, color=c, linestyle="--", linewidth=1.6)
+        all_vals.extend([ysh, yla])
+
+    ax.set_title(f"SE — Shannon (sólido) vs SE-LA (discontinuo) — {freq_mhz:.0f} MHz", pad=10)
+    ax.set_xlabel("Step"); ax.set_ylabel("SE (b/s/Hz)")
+    ax.grid(True, linestyle="--", alpha=0.35); ax.set_axisbelow(True)
+    _pad_ylim(ax, all_vals)
+
+    # Leyenda de UEs (afuera)
+    _legend_outside(ax, title="UEs (color)")
+    # Leyenda de estilos (adentro, esquina sup. izq.)
+    handles_style = [
+        Line2D([0],[0], color="k", linestyle="-",  linewidth=1.9, label="Shannon"),
+        Line2D([0],[0], color="k", linestyle="--", linewidth=1.6, label="SE-LA"),
+    ]
+    ax.add_artist(ax.legend(handles=handles_style, loc="upper left", frameon=False, title="Estilos"))
+
+    out = out_dir / f"ALL_UEs_SE_{int(freq_mhz)}MHz.png"
+    fig.savefig(out, dpi=180, bbox_inches="tight"); plt.close(fig)
+
+# ===== 4) TBLER (step) con todos los UEs =====
+def plot_all_ues_tblers_by_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir: Path):
+    df_f = df_all[np.isclose(df_all["freq_mhz"], freq_mhz)].copy()
+    if df_f.empty:
+        print(f"[WARN] No hay datos para {freq_mhz} MHz")
+        return
+    ue_ids, _ = _ue_labels(df_f)
+    colors = _palette(len(ue_ids))
+    xoffs  = _build_offsets(len(ue_ids), base=0.10)
+
+    fig, ax = plt.subplots(figsize=(11.5, 6.2))
+    all_vals = []
+
+    for c, ue, xo in zip(colors, ue_ids, xoffs):
+        dfx = df_f[df_f["ue_id"] == ue].sort_values("step")
+        x   = dfx["step"].to_numpy(float) + xo
+        y   = dfx["tbler_step"].to_numpy(float)
+        ax.plot(x, y, color=c, marker="o", linestyle="-", linewidth=1.8, label=f"UE{ue}")
+        all_vals.append(y)
+
+    ax.set_title(f"TBLER (por step) — {freq_mhz:.0f} MHz", pad=10)
+    ax.set_xlabel("Step"); ax.set_ylabel("TBLER")
+    ax.grid(True, linestyle="--", alpha=0.35); ax.set_axisbelow(True)
+    _pad_ylim(ax, all_vals)
+    _legend_outside(ax, title="UEs")
+    out = out_dir / f"ALL_UEs_TBLERstep_{int(freq_mhz)}MHz.png"
+    fig.savefig(out, dpi=180, bbox_inches="tight"); plt.close(fig)
+
+# ===== 5) TBLER running con todos los UEs =====
+def plot_all_ues_tbler_running_by_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir: Path):
+    df_f = df_all[np.isclose(df_all["freq_mhz"], freq_mhz)].copy()
+    if df_f.empty:
+        print(f"[WARN] No hay datos para {freq_mhz} MHz")
+        return
+    ue_ids, _ = _ue_labels(df_f)
+    colors = _palette(len(ue_ids))
+    xoffs  = _build_offsets(len(ue_ids), base=0.10)
+
+    fig, ax = plt.subplots(figsize=(11.5, 6.2))
+    all_vals = []
+
+    for c, ue, xo in zip(colors, ue_ids, xoffs):
+        dfx = df_f[df_f["ue_id"] == ue].sort_values("step")
+        x   = dfx["step"].to_numpy(float) + xo
+        y   = dfx["tbler_running"].to_numpy(float)
+        ax.plot(x, y, color=c, marker="o", linestyle="-", linewidth=1.8, label=f"UE{ue}")
+        all_vals.append(y)
+
+    ax.set_title(f"TBLER running — {freq_mhz:.0f} MHz", pad=10)
+    ax.set_xlabel("Step"); ax.set_ylabel("TBLER")
+    ax.grid(True, linestyle="--", alpha=0.35); ax.set_axisbelow(True)
+    _pad_ylim(ax, all_vals)
+    _legend_outside(ax, title="UEs")
+    out = out_dir / f"ALL_UEs_TBLERrun_{int(freq_mhz)}MHz.png"
+    fig.savefig(out, dpi=180, bbox_inches="tight"); plt.close(fig)
+
+# ===== Orquestador: generar todos los gráficos por frecuencia =====
+def plot_all_ues_all_metrics_by_freq(df_all: pd.DataFrame, out_dir: Path, show_prx_theo=True):
+    freqs = sorted(df_all["freq_mhz"].dropna().unique().tolist())
+    out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+    for f in freqs:
+        plot_all_ues_prx_by_freq(df_all, f, out_dir, show_theoretical=show_prx_theo)
+        plot_all_ues_sinr_by_freq(df_all, f, out_dir)
+        plot_all_ues_se_combined_by_freq(df_all, f, out_dir)
+        plot_all_ues_tblers_by_freq(df_all, f, out_dir)
+        plot_all_ues_tbler_running_by_freq(df_all, f, out_dir)
 
 
 def main():
@@ -700,7 +993,13 @@ def main():
         out_traj = OUT_DIR / f"traj_{int(fmhz)}MHz.png"
         title = f"SCENE={SCENE} — freq={fmhz:.0f} MHz — DRONE_START={DRONE_START}"
         plot_trajectories_xy_xz(r["tracks"], out_path=out_traj, title_prefix=title,
-                                step_stride=5, show_step_labels=False)
+                               step_stride=5, show_step_labels=False)
+        
+
+    plot_all_ues_all_metrics_by_freq(df_all, OUT_DIR, show_prx_theo=True)
+
+
+    
 
     print(f"[DONE] Imágenes en: {OUT_DIR}")
 
