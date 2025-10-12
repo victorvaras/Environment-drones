@@ -245,15 +245,7 @@ class SionnaRT:
             batch_size=[self.num_bs]
         )
 
-        # Scheduler: Proporcional Fair Scheduling para Sumimo
-        self.scheduler = PFSchedulerSUMIMO(
-            num_ut=self.num_ut,
-            num_freq_res=self.num_subcarriers,
-            num_ofdm_sym=self.num_ofdm_symbols,
-            batch_size=[self.num_bs],
-            num_streams_per_ut=self.num_ut_ant,
-            beta=0.9            # factor para eleccion de receptor 0 lo mas distribuido posible, 1 el que menos le a tocado
-        )
+        
 
         
         # Crear ResourceGrid para usar después
@@ -347,9 +339,7 @@ class SionnaRT:
         # Sanity
         assert self.scene is not None and self._solver is not None and self.tx is not None, \
             "Sionna RT no quedó inicializado correctamente."
-
-
-
+    
     def _create_transmitters(self):
         """
         Crea SIEMPRE 1 TX y lo añade a la escena.
@@ -572,6 +562,7 @@ class SionnaRT:
 
         # REs asignados por BS y UT: [num_bs, num_ut]
         allocation_mask = self._build_ofdma_equal_mask_rr_tf()
+
         num_allocated_re = tf.reduce_sum(tf.cast(allocation_mask, tf.int32), axis=[ 1, 2, 4])
 
         # --- Pathloss medio por UT (heurístico) ---
