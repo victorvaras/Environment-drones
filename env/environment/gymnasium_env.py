@@ -32,7 +32,7 @@ class DroneEnv(gym.Env):
             antenna_mode: str = "ISO",
             max_steps: int = 400,
             render_mode: str | None = None,
-            drone_start: tuple[float, float, float] = (10.0, 0.0, 20.0),
+            drone_start: tuple[float, float, float] = (0.0, 0.0, 20.0),
 
     ):
         super().__init__()
@@ -121,19 +121,7 @@ class DroneEnv(gym.Env):
             # Fallback si tu contenedor expone otra API
             self.num_ut = int(getattr(self.receptores, "num", getattr(self.receptores, "n", 0)))
 
-        # 2) Acumuladores por-UE para la tabla superior (intent/os/éxitos por UE)
-        self._acc = {i: {"bits_ok": 0, "attempts": 0, "successes": 0} for i in range(self.num_ut)}
-
-        # 3) Acumuladores por-UE para la tabla inferior derecha (bloques y bits)
-        self.blocks_acc_tx = [0 for _ in range(self.num_ut)]  # intentos (TX) acumulados
-        self.blocks_acc_ok = [0 for _ in range(self.num_ut)]  # éxitos (OK) acumulados
-        self.bits_acc_total = [0 for _ in range(self.num_ut)]  # bits OK acumulados
-
-        # (Si usabas un dict de bloques, mantenlo alineado con num_ut)
-        self.blocks_acc = {i: {"tx": 0, "ok": 0} for i in range(self.num_ut)}
-
-        # 4) Estado para el render
-        self._last_ue_metrics = []
+       
 
         return obs, info
 

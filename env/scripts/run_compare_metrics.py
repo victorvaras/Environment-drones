@@ -40,17 +40,17 @@ from env.environment.gymnasium_env import DroneEnv  # adapta si tu ruta difiere
 SCENE = "simple_street_canyon_with_cars"  # p.ej. "santiago.xml", "munich"
 DRONE_START = (0.0, 0.0, 10.0)
 RX_POSITIONS = [
-    #(-50.0, 0.0, 1.5),
+    (-50.0, 0.0, 1.5),
     (20.0, -30.0, 1.5),
     (20.0, 0.0, 1.5),
-    (-20.0, 0.0, 1.5),
+    #(-20.0, 0.0, 1.5),
     #(0, 0, 1.5),
     #(-1.0, 0.0, 1.5),
     #(0.0,   30.0, 1.5),
     #(20.0,  -30.0, 1.5),
     (80.0,   40.0, 1.5),
-    (50.0,    0.0, 1.5),
-    #(90, -55, 1.5),
+    #(50.0,    0.0, 1.5),
+    (-90, -55, 1.5),
 ]
 MAX_STEPS = 50
 

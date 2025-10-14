@@ -16,7 +16,7 @@ from sionna.rt import (
     RadioMapSolver,
 )
 
-from sionna.sys import PHYAbstraction, OuterLoopLinkAdaptation, PFSchedulerSUMIMO, downlink_fair_power_control
+from sionna.sys import PHYAbstraction, OuterLoopLinkAdaptation, downlink_fair_power_control
 from sionna.phy.nr.utils import decode_mcs_index
 from sionna.phy.utils import log2, dbm_to_watt, lin_to_db
 from sionna.phy.constants import BOLTZMANN_CONSTANT
@@ -146,16 +146,20 @@ class SionnaRT:
                  tx_orientation_deg: tuple[float, float, float] = (0.0, -90.0, 0.0), # [°] yaw,pitch,roll
 
                  # --- control del trazador de caminos (PathSolver) ---
-                 max_depth: int = 2,              # Nº máx. de interacciones por camino
+                 max_depth: int = 5,              # Nº máx. de interacciones por camino
                  los: bool = True,                # Considerar Line-of-Sight
                  specular_reflection: bool = True,# Reflexiones especulares (reflexiones tipo espejo)
                  diffuse_reflection: bool = True, # Reflexiones difusas, por superficies rugosas (muy costoso, realista)
                  refraction: bool = True,         # Refracción (atravesar vidrios, etc. cambiar angulo y atenuar)
                  synthetic_array: bool = False,   # True: matriz sintética (rápido); False: por elemento (en false realista)
-                 samples_per_src: int | None = 500_000,    # Nº de rayos por fuente (default 1,000,000)
+                 samples_per_src: int | None = 1_000_000,    # Nº de rayos por fuente (default 1,000,000)
                  max_num_paths_per_src: int | None = None,  # Tope de caminos por fuente (None => default) (default 1000000)
                  seed: int = 41,                   # Semilla del muestreo estocástico
-
+                 
+                 #Version de sionna 1.2 revisar los siguientes parametros (false por defecto)
+                 diffraction: bool = False,         # Difracción (curvas en las aritas)
+                 edge_diffraction: bool = False,    # Difracción por aristas (curvas en las aritas)
+                 diffraction_lit_region: bool = False, # Difracción en región iluminada (no sombra)
 
 
                 # --- parametros SYS
@@ -211,6 +215,9 @@ class SionnaRT:
         self.samples_per_src = samples_per_src
         self.max_num_paths_per_src = max_num_paths_per_src
         self.seed = seed
+        self.diffraction = diffraction
+        self.edge_diffraction = edge_diffraction
+        self.diffraction_lit_region = diffraction_lit_region
 
         # --- objetos RT ---
         self.scene: Scene | None = None
@@ -435,6 +442,9 @@ class SionnaRT:
             refraction=self.refraction,
             synthetic_array=self.synthetic_array,
             seed=self.seed,
+            diffraction=self.diffraction,
+            edge_diffraction=self.edge_diffraction,
+            diffraction_lit_region=self.diffraction_lit_region,
             **extra,
         )
 

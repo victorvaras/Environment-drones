@@ -47,7 +47,8 @@ if __name__ == "__main__":
 
     while not (done or trunc):
         a = [0, 0, 0]
-        obs, rew, done, trunc, info = env.step(a)
+        b = [0, 0, 0]
+        obs, rew, done, trunc, info = env.step(a,b)
 
     end_time = perf_counter()
     elapsed = end_time - start_time
