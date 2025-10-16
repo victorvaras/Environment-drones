@@ -73,6 +73,9 @@ OUT_DIR_UE_METRICS.mkdir(parents=True, exist_ok=True)
 OUT_DIR_UE_all_METRICS = OUT_DIR / "metricas-totales-por-usuario-y-frecuencia"
 OUT_DIR_UE_all_METRICS.mkdir(parents=True, exist_ok=True)
 
+OUT_DIR_FREQ_METRICS = OUT_DIR / "metricas-totales-por-frecuencia"
+OUT_DIR_FREQ_METRICS.mkdir(parents=True, exist_ok=True)
+
 
 def _scalar_float(x):
     """Convierte x (Dr.Jit Float, numpy scalar, etc.) a float de Python."""
@@ -1168,6 +1171,81 @@ def plot_all_ues_tbler_running_by_freq(
     fig.savefig(out, dpi=180, bbox_inches="tight")
     plt.close(fig)
 
+def plot_all_ues_metrics_by_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir: Path):
+    """
+    Genera una figura por métrica (PRx, SINR, SE, TBLER-step, TBLER-running),
+    donde cada figura muestra las curvas de todos los UEs para la frecuencia indicada.
+    Guarda las imágenes en la subcarpeta 'metricas-totales-por-frecuencia',
+    la cual ya debe existir antes de llamar esta función.
+    La leyenda se coloca fuera del gráfico en una posición común.
+    """
+    df_f = df_all[np.isclose(df_all["freq_mhz"], freq_mhz)].copy()
+    if df_f.empty:
+        print(f"[WARN] No hay datos para {freq_mhz} MHz")
+        return
+
+    ue_ids = sorted(df_f["ue_id"].unique())
+    print(f"[INFO] Generando métricas para frecuencia {freq_mhz} MHz con {len(ue_ids)} UEs")
+
+    metrics = {
+        "prx_dbm": {
+            "ylabel": "PRx [dBm]",
+            "title": "Potencia recibida (PRx)",
+            "filename": f"PRx_all_UEs_{int(freq_mhz)}MHz.png"
+        },
+        "sinr_eff_db": {
+            "ylabel": "SINR [dB]",
+            "title": "Relación señal/ruido (SINR)",
+            "filename": f"SINR_all_UEs_{int(freq_mhz)}MHz.png"
+        },
+        "se_la": {
+            "ylabel": "SE-LA [b/s/Hz]",
+            "title": "Eficiencia espectral (SE-LA)",
+            "filename": f"SE_LA_all_UEs_{int(freq_mhz)}MHz.png"
+        },
+        "tbler_step": {
+            "ylabel": "TBLER",
+            "title": "TBLER por step",
+            "filename": f"TBLER_step_all_UEs_{int(freq_mhz)}MHz.png"
+        },
+        "tbler_running": {
+            "ylabel": "TBLER",
+            "title": "TBLER running",
+            "filename": f"TBLER_running_all_UEs_{int(freq_mhz)}MHz.png"
+        }
+    }
+
+    for metric, cfg in metrics.items():
+        if metric not in df_f.columns:
+            print(f"[WARN] No existe la métrica '{metric}' en el dataframe.")
+            continue
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+
+        for ue in ue_ids:
+            dfx = df_f[df_f["ue_id"] == ue].sort_values("step")
+            ax.plot(dfx["step"], dfx[metric], marker="o", linewidth=1.8, label=f"UE {ue}")
+
+        ax.set_xlabel("Step")
+        ax.set_ylabel(cfg["ylabel"])
+        ax.set_title(f"{cfg['title']} — {freq_mhz:.0f} MHz")
+        ax.grid(True, linestyle="--", alpha=0.4)
+
+        # ✅ Leyenda fuera del gráfico, posición fija para todas las imágenes
+        ax.legend(
+            loc="center left",
+            bbox_to_anchor=(1.02, 0.5),
+            borderaxespad=0,
+            fontsize=9,
+            title="Usuarios (UE)"
+        )
+
+        fig.tight_layout(rect=[0, 0, 0.85, 1])
+        out_path = out_dir / cfg["filename"]
+        fig.savefig(out_path, dpi=180, bbox_inches="tight")
+        plt.close(fig)
+
+        print(f"[OK] Guardado: {out_path.name}")
 
 def main():
     print(f"[INFO] Guardando resultados en: {OUT_DIR}")
@@ -1202,8 +1280,8 @@ def main():
     # plots totales por frecuencia
     for f in FREQS_MHZ:
        plot_all_metrics_single_freq(df_all, f, OUT_DIR_UE_all_METRICS)
-       
-    
+       plot_all_ues_metrics_by_freq(df_all, f, OUT_DIR_FREQ_METRICS)
+
     for f in FREQS_MHZ:
         plot_all_ues_prx_by_freq(df_all, f, OUT_DIR_RECEPTORS)                # solo prx
         plot_all_ues_se_comparison(df_all, f, OUT_DIR_RECEPTORS)
