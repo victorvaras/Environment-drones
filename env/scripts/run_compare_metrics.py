@@ -38,30 +38,30 @@ from env.environment.gymnasium_env import DroneEnv  # adapta si tu ruta difiere
 
 # ========= Configuración =========
 SCENE = "simple_street_canyon_with_cars"  # p.ej. "santiago.xml", "munich"
-DRONE_START = (0.0, 0.0, 10.0)
+DRONE_START = (90.0, 0.0, 10.0)
 RX_POSITIONS = [
     #(-50.0, 0.0, 1.5),
-    (20.0, -30.0, 1.5),
-    (20.0, 0.0, 1.5),
-    (-20.0, 0.0, 1.5),
+    #(20.0, -30.0, 1.5),
+    #(20.0, 0.0, 1.5),
+    #(-20.0, 0.0, 1.5),
     #(0, 0, 1.5),
     #(-1.0, 0.0, 1.5),
     #(0.0,   30.0, 1.5),
     #(20.0,  -30.0, 1.5),
     (80.0,   40.0, 1.5),
-    (50.0,    0.0, 1.5),
-    #(90, -55, 1.5),
+    #(50.0,    0.0, 1.5),
+    #(-90, -55, 1.5),
 ]
 MAX_STEPS = 50
 
 # Compara dos frecuencias (en MHz). Cambia a lo que necesites.
-FREQS_MHZ = [3500.0, 28000] #28000
+FREQS_MHZ = [7000.0] #28000
 FREQ_LABELS = [f"{f:.0f} MHz" for f in FREQS_MHZ]
 
 # Carpeta de salida con timestamp
 RUN_TAG = datetime.now().strftime("%Y%m%d-%H%M%S")
 #OUT_DIR = Path(project_root) / "outputs" / f"compare_metrics_{RUN_TAG}"
-OUT_DIR = Path(project_root) / "outputs" / f"compare_metrics_{RUN_TAG}"
+OUT_DIR = Path(project_root) / "outputs-pruebas-doppler-2" / f"compare_metrics_{RUN_TAG}_conVelocidad-normal"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 OUT_DIR_RECEPTORS = OUT_DIR / "receptors-metrics"
@@ -206,8 +206,8 @@ def run_episode(freq_mhz: float) -> dict:
         ue_traj.append(_get_rx_positions_xyz(env.rt).copy())
         steps.append(t)
 
-        a = [0,0,0]
-        b = [0,0,0]
+        a = [0, 0, 0]
+        b = [0, 0, 0]
 
         obs, rew, done, trunc, info = env.step(a, b)
 

@@ -32,7 +32,7 @@ class DroneEnv(gym.Env):
             antenna_mode: str = "ISO",
             max_steps: int = 400,
             render_mode: str | None = None,
-            drone_start: tuple[float, float, float] = (10.0, 0.0, 20.0),
+            drone_start: tuple[float, float, float] = (0.0, 0.0, 20.0),
 
     ):
         super().__init__()
@@ -49,6 +49,8 @@ class DroneEnv(gym.Env):
 
         # --- Guardar número de receptores ---
         numero_receptores = self.receptores.n
+        rx_velocities_mps = [(0.0, 0.0, 0.0) for _ in range(numero_receptores)]
+
 
         # --- Iniciando Sionna RT ---
         self.rt = SionnaRT(
@@ -58,6 +60,7 @@ class DroneEnv(gym.Env):
             # bandwidth_hz=bandwidth_hz,
             scene_name=scene_name,
             num_ut=numero_receptores,
+            rx_velocities_mps=rx_velocities_mps,
         )
 
         # --- Construir escena y colocar receptores ---
@@ -121,19 +124,7 @@ class DroneEnv(gym.Env):
             # Fallback si tu contenedor expone otra API
             self.num_ut = int(getattr(self.receptores, "num", getattr(self.receptores, "n", 0)))
 
-        # 2) Acumuladores por-UE para la tabla superior (intent/os/éxitos por UE)
-        self._acc = {i: {"bits_ok": 0, "attempts": 0, "successes": 0} for i in range(self.num_ut)}
-
-        # 3) Acumuladores por-UE para la tabla inferior derecha (bloques y bits)
-        self.blocks_acc_tx = [0 for _ in range(self.num_ut)]  # intentos (TX) acumulados
-        self.blocks_acc_ok = [0 for _ in range(self.num_ut)]  # éxitos (OK) acumulados
-        self.bits_acc_total = [0 for _ in range(self.num_ut)]  # bits OK acumulados
-
-        # (Si usabas un dict de bloques, mantenlo alineado con num_ut)
-        self.blocks_acc = {i: {"tx": 0, "ok": 0} for i in range(self.num_ut)}
-
-        # 4) Estado para el render
-        self._last_ue_metrics = []
+       
 
         return obs, info
 
@@ -152,6 +143,22 @@ class DroneEnv(gym.Env):
         rx_positions = self.receptores.step_all(actionR) #Se llama al metodo que se encarga de mover a los receptores
         for rx, pos in zip(self.rt.rx_list, rx_positions):
             rx.position = [float(pos[0]), float(pos[1]), float(pos[2])]
+
+        
+        # === (NUEVO) Velocidades para Doppler en Sionna-RT ===
+        # Si tienes doppler_enabled en tu DroneEnv:
+        """
+        try:
+            self.rt.set_velocities(
+                doppler_enabled=getattr(self, "doppler_enabled", False),
+                drone_velocity_mps=tuple(map(float, getattr(self, "drone_velocity_mps", (0.0, 0.0, 0.0)))),
+                rx_velocities_mps=[tuple(map(float, v)) for v in getattr(self, "rx_velocities_mps", [(0.0, 0.0, 0.0)]*len(self.rt.rx_list))]
+            )
+        except Exception as e:
+            print("[WARN] No se pudieron setear velocidades en RT:", e)
+            
+        """
+        
 
 
         # --- Ejecutar paso SYS y obtener métricas ---

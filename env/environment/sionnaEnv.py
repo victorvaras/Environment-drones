@@ -16,7 +16,7 @@ from sionna.rt import (
     RadioMapSolver,
 )
 
-from sionna.sys import PHYAbstraction, OuterLoopLinkAdaptation, PFSchedulerSUMIMO, downlink_fair_power_control
+from sionna.sys import PHYAbstraction, OuterLoopLinkAdaptation, downlink_fair_power_control
 from sionna.phy.nr.utils import decode_mcs_index
 from sionna.phy.utils import log2, dbm_to_watt, lin_to_db
 from sionna.phy.constants import BOLTZMANN_CONSTANT
@@ -101,6 +101,36 @@ def load_builtin_scene(name: str = "munich",
     return scene, solver
 
 
+def tf_unwrap_phase(phi: tf.Tensor) -> tf.Tensor:
+    """
+    Unwrap 1D phase array (rad) en TF graph mode.
+    phi: [T] float tensor
+    return: [T] float tensor
+    """
+    two_pi = tf.constant(2.0*np.pi, dtype=phi.dtype)
+    d = phi[1:] - phi[:-1]                       # incrementos
+    d_adj = d - two_pi * tf.round(d / two_pi)    # normalizar a (-pi, pi]
+    phi0 = phi[0:1]
+    phi_tail = phi0 + tf.cumsum(d_adj)
+    return tf.concat([phi0, phi_tail], axis=0)
+
+def debug_phase_slope(h: tf.Tensor,
+                      ofdm_symbol_duration: float,
+                      ut=0, ua=0, bs=0, ba=0, f0=10, tag="[SYS DEBUG]"):
+    """
+    h: [num_ut, num_ut_ant, num_bs, num_bs_ant, T, F] complejo64
+    """
+    x = h[ut, ua, bs, ba, :, f0]                 # [T]
+    phi = tf.math.angle(x)                       # fase envuelta
+    phi_unw = tf_unwrap_phase(phi)               # desenrollada (sin tf.math.unwrap)
+    T = tf.shape(phi_unw)[0]
+    slope = (phi_unw[-1] - phi_unw[0]) / tf.cast(tf.maximum(1, T-1), tf.float32)  # rad/símb
+
+    Tsym = tf.convert_to_tensor(ofdm_symbol_duration, tf.float32)  # seg/símb
+    two_pi = tf.constant(2.0*np.pi, tf.float32)
+    fD_est = slope / (two_pi * Tsym)             # Hz
+    tf.print(tag, "T=", T, "F=", tf.shape(h)[-1], "slope(rad/sym)=", slope, "fD_est(Hz)=", fD_est)
+
 
 
 
@@ -119,8 +149,8 @@ class SionnaRT:
                  antenna_mode: str = "ISO",       # "ISO" | "SECTOR3_3GPP"
 
                  # --- RF / ruido ---
-                 frequency_mhz: float = 3500.0,   # Frecuencia portadora [MHz]
-                 tx_power_dbm: float = 40.0,      # Potencia TOTAL objetivo [dBm] (se reparte si hay sectores)
+                 frequency_mhz: float = 7000.0,   # Frecuencia portadora [MHz] #7000 doppler
+                 tx_power_dbm: float = 40.0,      # Potencia TOTAL objetivo [dBm] (se reparte si hay sectores) #8 doppler
 
                  # --- escena: nombre integrado o ruta a XML/carpeta ---
                  scene_name: str = "munich",
@@ -163,14 +193,21 @@ class SionnaRT:
 
                 # --- parametros SYS
                 num_ut: int = 6,                # número de usuarios/receptores
-                num_subcarriers: int = 128,     # número de subportadoras
-                num_ofdm_symbols: int = 12,     # número de símbolos OFDM
+                num_subcarriers: int = 128,     # número de subportadoras  #1024 doppler
+                num_ofdm_symbols: int =12,     # número de símbolos OFDM   # 168 doppler
                 bler_target: float = 0.1,       # objetivo de BLER para el enlace
                 mcs_table_index: int = 1,       # índice de la tabla MCS a utilizar
                 num_ut_ant: int = 1,            # número de antenas por usuario
                 num_bs: int = 1,                # número de estaciones base                
-                subcarrier_spacing: float = 30e3,
-                temperatura: int = 294        # temperatura en K (para cálculo de ruido térmico) 21°C = 294K
+                subcarrier_spacing: float = 30_000, #30e3 # Separación entre subportadoras [Hz] #7500 doppler
+                temperatura: int = 294,        # temperatura en K (para cálculo de ruido térmico) 21°C = 294K
+
+
+
+                #num_ut: int = None,     # si ya lo recibes, mantenlo; si no, se infiere más abajo
+                doppler_enabled: bool = False,           # bandera global para activar/desactivar Doppler
+                drone_velocity_mps: tuple[float, float, float] = (60.0, 0.0, 0.0),  # vx, vy, vz del dron en m/s
+                rx_velocities_mps: list[tuple[float, float, float]] | None = None, 
                ):
 
         # --- Modo ---
@@ -238,6 +275,12 @@ class SionnaRT:
         self.subcarrier_spacing = subcarrier_spacing
         self.temperatura = temperatura
 
+
+        #efecto doppler
+        self.doppler_enabled = doppler_enabled
+        self.drone_velocity_mps = drone_velocity_mps
+        self.rx_velocities_mps = rx_velocities_mps
+        self.tx_velocities = drone_velocity_mps
 
 
         # PHY Abstraction
@@ -379,6 +422,8 @@ class SionnaRT:
         )
         tx.orientation = [_norm_deg(base_yaw), float(base_pitch), float(base_roll)]
         tx.power_dbm = float(self.tx_power_dbm_total)
+        tx.velocity = self.tx_velocities
+        #tx.velocity = [0,0,0]
 
         # Añade a escena y guarda referencias
         self.scene.add(tx)
@@ -443,7 +488,7 @@ class SionnaRT:
             edge_diffraction=self.edge_diffraction,
             diffraction_lit_region=self.diffraction_lit_region,
             synthetic_array=self.synthetic_array,
-            seed=self.seed,
+            seed=self.seed,             
             **extra,
         )
 
@@ -545,6 +590,9 @@ class SionnaRT:
         
 
 
+
+    
+
     # --- Calculo de SYS
     @tf.function  # (jit_compile=True)
     def sys_step(self, h, harq_feedback, sinr_eff_feedback, num_decoded_bits):
@@ -561,6 +609,12 @@ class SionnaRT:
         EPS_NO = tf.constant(1e-18, tf.float32)
         no = tf.maximum(no, EPS_NO)
 
+        # --- DEBUG DOPPLER: pendiente de fase por símbolo ---
+        debug_phase_slope(
+            h,
+            ofdm_symbol_duration=float(self.resource_grid.ofdm_symbol_duration),
+            ut=0, ua=0, bs=0, ba=0, f0=10, tag="[SYS DEBUG]"
+        )
 
 
         # --- Ganancia de canal y tasa Shannon estimada (para scheduler PF) ---
@@ -843,6 +897,7 @@ class SionnaRT:
             subcarrier_spacing=self.subcarrier_spacing
         )
 
+
         # 2) CFR crudo desde RT (numpy): [num_rx, num_tx, T, F]
         h_freq_np = paths.cfr(
             frequencies=frequencies,
@@ -923,6 +978,46 @@ class SionnaRT:
         allocation_mask = tf.expand_dims(onehot_ue, axis=-1) & stream0        # [num_bs, T, F, U, S] bool
         return allocation_mask
 
+    def set_velocities(
+        self,
+        doppler_enabled: bool,
+        drone_velocity_mps: tuple[float, float, float],
+        rx_velocities_mps: list[tuple[float, float, float]],
+    ) -> None:
+        """
+        Copia las velocidades (m/s) a los objetos de la escena RT.
+        - NO cambia posiciones.
+        - Si doppler_enabled=False, fuerza v=(0,0,0) (Doppler=0).
+        """
+        
+        if self.scene is None:
+            return  # aún no construida
+
+        # TX principal (asumo 1 dron -> 1 TX 'activo')
+        try:
+            vtx = (0.0, 0.0, 0.0) if not doppler_enabled else drone_velocity_mps
+            if hasattr(self, "txs") and self.txs:
+                # lista de TX (p.ej., 1 o 3 sectores). Aplica misma v a todos los sectores del dron
+                for tx in self.txs:
+                    tx_velocities = [float(vtx[0]), float(vtx[1]), float(vtx[2])]
+            elif hasattr(self.scene, "tx") and self.scene.tx is not None:
+                self.scene.tx_velocities = [float(vtx[0]), float(vtx[1]), float(vtx[2])]
+        except Exception as e:
+            print("[WARN] set_velocities: no se pudo setear TX.velocity:", e)
+
+        # RX list (asumo que construiste self.rx_list)
+        try:
+            if hasattr(self, "rx_list") and self.rx_list:
+                N = min(len(self.rx_list), len(rx_velocities_mps))
+                for i in range(N):
+                    vrx = (0.0, 0.0, 0.0) if not doppler_enabled else rx_velocities_mps[i]
+                    self.rx_list[i].velocity = [float(vrx[0]), float(vrx[1]), float(vrx[2])]
+        except Exception as e:
+            print("[WARN] set_velocities: no se pudo setear RX[i].velocity:", e)
+
+
+
+
 
 
     # ---- Métricas adicionales Calculo teorico de Pr----
@@ -962,5 +1057,3 @@ class SionnaRT:
         prx_dbm = Pt_dBm + K_dB - 10.0 * float(gamma) * np.log10(ratio)
         return np.asarray(prx_dbm, dtype=float).reshape(-1)
 
-
-    
