@@ -42,7 +42,7 @@ MAX_STEPS = 50
 
 
 if __name__ == "__main__":
-    
+    start_time = time.perf_counter()
 
     env = DroneEnv(
         render_mode="human",
@@ -67,7 +67,8 @@ if __name__ == "__main__":
 
     #time.sleep(20)  # para ver mejor la animación
     env.close()
-
+    elapsed = time.perf_counter() - start_time
+    print(f"Tiempo total transcurrido: {elapsed:.3f} s ({elapsed / 60:.2f} min)")
 
 
 
