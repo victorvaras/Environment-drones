@@ -49,6 +49,8 @@ class DroneEnv(gym.Env):
 
         # --- Guardar número de receptores ---
         numero_receptores = self.receptores.n
+        rx_velocities_mps = [(0.0, 0.0, 0.0) for _ in range(numero_receptores)]
+
 
         # --- Iniciando Sionna RT ---
         self.rt = SionnaRT(
@@ -58,6 +60,7 @@ class DroneEnv(gym.Env):
             # bandwidth_hz=bandwidth_hz,
             scene_name=scene_name,
             num_ut=numero_receptores,
+            rx_velocities_mps=rx_velocities_mps,
         )
 
         # --- Construir escena y colocar receptores ---
@@ -140,6 +143,22 @@ class DroneEnv(gym.Env):
         rx_positions = self.receptores.step_all(actionR) #Se llama al metodo que se encarga de mover a los receptores
         for rx, pos in zip(self.rt.rx_list, rx_positions):
             rx.position = [float(pos[0]), float(pos[1]), float(pos[2])]
+
+        
+        # === (NUEVO) Velocidades para Doppler en Sionna-RT ===
+        # Si tienes doppler_enabled en tu DroneEnv:
+        """
+        try:
+            self.rt.set_velocities(
+                doppler_enabled=getattr(self, "doppler_enabled", False),
+                drone_velocity_mps=tuple(map(float, getattr(self, "drone_velocity_mps", (0.0, 0.0, 0.0)))),
+                rx_velocities_mps=[tuple(map(float, v)) for v in getattr(self, "rx_velocities_mps", [(0.0, 0.0, 0.0)]*len(self.rt.rx_list))]
+            )
+        except Exception as e:
+            print("[WARN] No se pudieron setear velocidades en RT:", e)
+            
+        """
+        
 
 
         # --- Ejecutar paso SYS y obtener métricas ---
