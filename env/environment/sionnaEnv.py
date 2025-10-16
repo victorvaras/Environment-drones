@@ -146,11 +146,14 @@ class SionnaRT:
                  tx_orientation_deg: tuple[float, float, float] = (0.0, -90.0, 0.0), # [°] yaw,pitch,roll
 
                  # --- control del trazador de caminos (PathSolver) ---
-                 max_depth: int = 2,              # Nº máx. de interacciones por camino
+                 max_depth: int = 5,              # Nº máx. de interacciones por camino
                  los: bool = True,                # Considerar Line-of-Sight
                  specular_reflection: bool = True,# Reflexiones especulares (reflexiones tipo espejo)
                  diffuse_reflection: bool = True, # Reflexiones difusas, por superficies rugosas (muy costoso, realista)
                  refraction: bool = True,         # Refracción (atravesar vidrios, etc. cambiar angulo y atenuar)
+                 diffraction: bool = True,  # Difracción, activador general
+                 edge_diffraction: bool = True,  # Difracción en aristas y esquinas
+                 diffraction_lit_region: bool = True,
                  synthetic_array: bool = False,   # True: matriz sintética (rápido); False: por elemento (en false realista)
                  samples_per_src: int | None = 500_000,    # Nº de rayos por fuente (default 1,000,000)
                  max_num_paths_per_src: int | None = None,  # Tope de caminos por fuente (None => default) (default 1000000)
@@ -207,6 +210,9 @@ class SionnaRT:
         self.specular_reflection = specular_reflection
         self.diffuse_reflection = diffuse_reflection
         self.refraction = refraction
+        self.diffraction = diffraction
+        self.edge_diffraction = edge_diffraction
+        self.diffraction_lit_region = diffraction_lit_region
         self.synthetic_array = synthetic_array
         self.samples_per_src = samples_per_src
         self.max_num_paths_per_src = max_num_paths_per_src
@@ -433,6 +439,9 @@ class SionnaRT:
             specular_reflection=self.specular_reflection,
             diffuse_reflection=self.diffuse_reflection,
             refraction=self.refraction,
+            diffraction=self.diffraction,
+            edge_diffraction=self.edge_diffraction,
+            diffraction_lit_region=self.diffraction_lit_region,
             synthetic_array=self.synthetic_array,
             seed=self.seed,
             **extra,
@@ -497,8 +506,17 @@ class SionnaRT:
         try:
             if with_radio_map:
                 rm_solver = RadioMapSolver()
-                rm = rm_solver(scene=self.scene, max_depth=self.max_depth,
-                               cell_size=[1, 1], samples_per_tx=10**5)
+                rm = rm_solver(scene=self.scene,
+                               max_depth=self.max_depth,
+                               cell_size=[1, 1],
+                               samples_per_tx=10 ** 5,
+                               specular_reflection=self.specular_reflection,
+                               diffuse_reflection=self.diffuse_reflection,
+                               refraction=self.refraction,
+                               diffraction=self.diffraction,
+                               edge_diffraction=self.edge_diffraction,
+                               diffraction_lit_region=self.diffraction_lit_region
+                               )
                 self.scene.render_to_file(camera=cam, radio_map=rm,
                                           filename=filename, resolution=list(resolution))
             else:
