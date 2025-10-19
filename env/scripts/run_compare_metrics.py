@@ -38,30 +38,30 @@ from env.environment.gymnasium_env import DroneEnv  # adapta si tu ruta difiere
 
 # ========= Configuración =========
 SCENE = "simple_street_canyon_with_cars"  # p.ej. "santiago.xml", "munich"
-DRONE_START = (90.0, 0.0, 10.0)
+DRONE_START = (0.0, 0.0, 10.0)
 RX_POSITIONS = [
-    #(-50.0, 0.0, 1.5),
-    #(20.0, -30.0, 1.5),
-    #(20.0, 0.0, 1.5),
-    #(-20.0, 0.0, 1.5),
-    #(0, 0, 1.5),
-    #(-1.0, 0.0, 1.5),
-    #(0.0,   30.0, 1.5),
-    #(20.0,  -30.0, 1.5),
+    (-50.0, 0.0, 1.5),
+    (20.0, -30.0, 1.5),
+    (20.0, 0.0, 1.5),
+    (-20.0, 0.0, 1.5),
+    (0, 0, 1.5),
+    (-1.0, 0.0, 1.5),
+    (0.0,   30.0, 1.5),
+    (20.0,  -30.0, 1.5),
     (80.0,   40.0, 1.5),
-    #(50.0,    0.0, 1.5),
-    #(-90, -55, 1.5),
+    (50.0,    0.0, 1.5),
+    (-90, -55, 1.5),
 ]
 MAX_STEPS = 50
 
 # Compara dos frecuencias (en MHz). Cambia a lo que necesites.
-FREQS_MHZ = [7000.0] #28000
+FREQS_MHZ = [3500.0] #28000
 FREQ_LABELS = [f"{f:.0f} MHz" for f in FREQS_MHZ]
 
 # Carpeta de salida con timestamp
 RUN_TAG = datetime.now().strftime("%Y%m%d-%H%M%S")
 #OUT_DIR = Path(project_root) / "outputs" / f"compare_metrics_{RUN_TAG}"
-OUT_DIR = Path(project_root) / "outputs-pruebas-doppler-2" / f"compare_metrics_{RUN_TAG}_conVelocidad-normal"
+OUT_DIR = Path(project_root) / "outputs-pruebas-doppler-2" / f"compare_metrics_{RUN_TAG}"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 OUT_DIR_RECEPTORS = OUT_DIR / "receptors-metrics"
@@ -75,6 +75,8 @@ OUT_DIR_UE_all_METRICS.mkdir(parents=True, exist_ok=True)
 
 OUT_DIR_FREQ_METRICS = OUT_DIR / "metricas-totales-por-frecuencia"
 OUT_DIR_FREQ_METRICS.mkdir(parents=True, exist_ok=True)
+
+
 
 
 def _scalar_float(x):
@@ -376,9 +378,15 @@ def to_dataframe(run_dict: dict) -> pd.DataFrame:
                 se_sh = m.get("se_shannon", np.nan)
                 se_gap = m.get("se_gap_pct", np.nan)
                 tbler_step = m.get("tbler", np.nan)
+
+                doppler_fd_hz  = m.get("doppler_fd_hz", np.nan)
+                doppler_slope  = m.get("doppler_slope_rad_per_sym", np.nan)
+                doppler_nu     = m.get("doppler_nu_fd_over_scs", np.nan)
+                doppler_Tc_sec = m.get("doppler_Tc_seconds", np.nan)
             else:
                 ue_id = i
                 sinr = prx = se_la = se_sh = se_gap = tbler_step = np.nan
+                doppler_fd_hz = doppler_slope = doppler_nu = doppler_Tc_sec = np.nan
 
             # TBLER running
             tbler_run = tbler_run_vec[i] if (tbler_run_vec is not None and i < len(tbler_run_vec)) else np.nan
@@ -395,6 +403,11 @@ def to_dataframe(run_dict: dict) -> pd.DataFrame:
                 "se_gap_pct": float(se_gap) if se_gap is not None else np.nan,
                 "tbler_step": float(tbler_step) if tbler_step is not None else np.nan,
                 "tbler_running": float(tbler_run) if tbler_run is not None else np.nan,
+
+                "doppler_fd_hz": float(doppler_fd_hz) if doppler_fd_hz is not None else np.nan,
+                "doppler_slope_rad_per_sym": float(doppler_slope) if doppler_slope is not None else np.nan,
+                "doppler_nu": float(doppler_nu) if doppler_nu is not None else np.nan,
+                "doppler_Tc_ms": float(doppler_Tc_sec)*1e3 if doppler_Tc_sec not in (None, np.nan) else np.nan,
             })
 
     df = pd.DataFrame(rows)
@@ -1271,6 +1284,189 @@ def plot_all_ues_metrics_by_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir:
 
         print(f"[OK] Guardado: {out_path.name}")
 
+
+# ------ doppler ------
+def _ue_labels_(df_f: pd.DataFrame):
+    ue_ids = sorted(df_f["ue_id"].dropna().unique().tolist())
+    labels = [f"UE {int(u)}" for u in ue_ids]
+    return ue_ids, labels
+
+def _no_sci_y(ax):
+    """Desactiva notación científica en eje Y (y offset)"""
+    ax.yaxis.set_major_formatter(ScalarFormatter(useMathText=False))
+    ax.ticklabel_format(style='plain', axis='y', useOffset=False)
+    ax.get_yaxis().get_major_formatter().set_scientific(False)
+    ax.get_yaxis().get_major_formatter().set_useOffset(False)
+
+def _common_xy_limits(df_f: pd.DataFrame, ycol: str):
+    x_min = df_f["step"].min()
+    x_max = df_f["step"].max()
+    margin_x = 0.02 * max(1, (x_max - x_min))
+    x_lim = (x_min - margin_x, x_max + margin_x)
+
+    y_vals = df_f[ycol].to_numpy(dtype=float)
+    y_vals = y_vals[np.isfinite(y_vals)]
+    if y_vals.size == 0:
+        y_lim = (-1, 1)
+    else:
+        y_min, y_max = float(np.nanmin(y_vals)), float(np.nanmax(y_vals))
+        if y_min == y_max:
+            y_min -= 1.0; y_max += 1.0
+        margin_y = 0.05 * (y_max - y_min)
+        y_lim = (y_min - margin_y, y_max + margin_y)
+    return x_lim, y_lim
+
+
+def plot_fd_all_ues_onefig(df_all: pd.DataFrame, freq_mhz: float, out_dir: Path):
+    df_f = df_all[np.isclose(df_all["freq_mhz"], freq_mhz)].copy()
+    if df_f.empty or "doppler_fd_hz" not in df_f.columns:
+        print(f"[WARN] No hay datos de doppler_fd_hz para {freq_mhz} MHz")
+        return
+
+    ue_ids, labels = _ue_labels_(df_f)
+    x_lim, y_lim = _common_xy_limits(df_f, "doppler_fd_hz")
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    for ue, lbl in zip(ue_ids, labels):
+        dfx = df_f[df_f["ue_id"] == ue].sort_values("step")
+        x = dfx["step"].to_numpy(float)
+        y = dfx["doppler_fd_hz"].to_numpy(float)
+        ax.plot(x, y, marker="o", linewidth=1.8, label=lbl)
+
+    ax.axhline(0.0, linestyle="--", linewidth=1.0, alpha=0.5)
+    ax.set_title(f"Doppler estimado fD — {freq_mhz:.0f} MHz (todos los UEs)")
+    ax.set_xlabel("Step")
+    ax.set_ylabel("fD [Hz]")
+    ax.set_xlim(x_lim); ax.set_ylim(y_lim)
+    ax.grid(True, linestyle="--", alpha=0.4)
+    _no_sci_y(ax)
+
+    # leyenda compacta
+    ax.legend(loc="upper left", ncol=2, fontsize=9)
+
+    # explicación al pie
+    expl = (
+        "fD (Hz): frecuencia Doppler estimada por UE (a partir de la pendiente de fase entre símbolos). "
+        "Su magnitud crece con velocidad y frecuencia portadora. Signo: acercamiento/alejamiento relativo. "
+        "Impacto: a mayor |fD|, menor tiempo de coherencia; si no se compensa, puede degradar SINR/SE y aumentar TBLER."
+    )
+    fig.text(0.01, 0.01, expl, ha="left", va="bottom", fontsize=9, wrap=True)
+
+    plt.tight_layout(rect=[0, 0.05, 1, 0.96])
+    out = out_dir / f"Doppler_fD_ALL_{int(freq_mhz)}MHz.png"
+    fig.savefig(out, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_nu_tc_all_ues_onefig(df_all: pd.DataFrame, freq_mhz: float, out_dir: Path):
+    df_f = df_all[np.isclose(df_all["freq_mhz"], freq_mhz)].copy()
+    if df_f.empty or "doppler_nu" not in df_f.columns or "doppler_Tc_ms" not in df_f.columns:
+        print(f"[WARN] No hay datos de doppler_nu/Tc para {freq_mhz} MHz")
+        return
+
+    ue_ids, labels = _ue_labels_(df_f)
+    x_min = df_f["step"].min(); x_max = df_f["step"].max()
+    margin_x = 0.02 * max(1, (x_max - x_min))
+    x_lim = (x_min - margin_x, x_max + margin_x)
+
+    # límites para nu
+    y_vals = df_f["doppler_nu"].to_numpy(dtype=float)
+    y_vals = y_vals[np.isfinite(y_vals)]
+    if y_vals.size == 0:
+        y_lim_nu = (0.0, 0.1)
+    else:
+        y_min, y_max = float(np.nanmin(y_vals)), float(np.nanmax(y_vals))
+        if y_min == y_max:
+            y_min -= 0.01; y_max += 0.01
+        margin_y = 0.1 * (y_max - y_min)
+        y_lim_nu = (max(0.0, y_min - margin_y), y_max + margin_y)
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    # ν por UE
+    for ue, lbl in zip(ue_ids, labels):
+        dfx = df_f[df_f["ue_id"] == ue].sort_values("step")
+        x = dfx["step"].to_numpy(float)
+        nu = dfx["doppler_nu"].to_numpy(float)
+        ax.plot(x, nu, marker="o", linewidth=1.8, label=lbl)
+
+    ax.set_title(f"Doppler normalizado ν=fD/SCS y tiempo de coherencia Tc — {freq_mhz:.0f} MHz (todos los UEs)")
+    ax.set_xlabel("Step")
+    ax.set_ylabel("ν (adimensional)")
+    ax.set_xlim(x_lim); ax.set_ylim(y_lim_nu)
+    ax.grid(True, linestyle="--", alpha=0.4)
+    _no_sci_y(ax)
+
+    # bandas guía de interpretación
+    for lo, hi, name in [(0.0, 0.005, "despreciable"), (0.005, 0.02, "bajo"),
+                         (0.02, 0.05, "moderado"), (0.05, 0.1, "alto")]:
+        ax.axhspan(lo, hi, alpha=0.06)
+
+    # Tc en eje derecho
+    ax2 = ax.twinx()
+    for ue in ue_ids:
+        dfx = df_f[df_f["ue_id"] == ue].sort_values("step")
+        x = dfx["step"].to_numpy(float)
+        tc = dfx["doppler_Tc_ms"].to_numpy(float)
+        ax2.plot(x, tc, linestyle=":", linewidth=1.5, alpha=0.7)
+    ax2.set_ylabel("Tc [ms]")
+    _no_sci_y(ax2)
+
+    # leyenda (UEs) una vez
+    ax.legend(loc="upper left", ncol=2, fontsize=9)
+
+    expl = (
+        "ν=fD/SCS: Doppler normalizado (cuánto representa el Doppler respecto al espaciado de subportadoras). "
+        "≈0–0.005 despreciable, 0.005–0.02 bajo, 0.02–0.05 moderado, 0.05–0.1 alto, >0.1 severo (OFDM sufre sin compensación). "
+        "Tc≈0.423/|fD|: tiempo de coherencia; si la duración del TB o ventana del step es >> Tc, el canal cambia dentro del bloque."
+    )
+    fig.text(0.01, 0.01, expl, ha="left", va="bottom", fontsize=9, wrap=True)
+
+    plt.tight_layout(rect=[0, 0.06, 1, 0.96])
+    out = out_dir / f"Doppler_nu_Tc_ALL_{int(freq_mhz)}MHz.png"
+    fig.savefig(out, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_slope_all_ues_onefig(df_all: pd.DataFrame, freq_mhz: float, out_dir: Path):
+    df_f = df_all[np.isclose(df_all["freq_mhz"], freq_mhz)].copy()
+    if df_f.empty or "doppler_slope_rad_per_sym" not in df_f.columns:
+        print(f"[WARN] No hay datos de slope para {freq_mhz} MHz")
+        return
+
+    ue_ids, labels = _ue_labels_(df_f)
+    x_lim, y_lim = _common_xy_limits(df_f, "doppler_slope_rad_per_sym")
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    for ue, lbl in zip(ue_ids, labels):
+        dfx = df_f[df_f["ue_id"] == ue].sort_values("step")
+        x = dfx["step"].to_numpy(float)
+        y = dfx["doppler_slope_rad_per_sym"].to_numpy(float)
+        ax.plot(x, y, marker="o", linewidth=1.8, label=lbl)
+
+    ax.axhline(0.0, linestyle="--", linewidth=1.0, alpha=0.5)
+    ax.set_title(f"Pendiente de fase por símbolo — {freq_mhz:.0f} MHz (todos los UEs)")
+    ax.set_xlabel("Step")
+    ax.set_ylabel("slope [rad/símb]")
+    ax.set_xlim(x_lim); ax.set_ylim(y_lim)
+    ax.grid(True, linestyle="--", alpha=0.4)
+    _no_sci_y(ax)
+
+    ax.legend(loc="upper left", ncol=2, fontsize=9)
+
+    expl = (
+        "slope (rad/símb): rotación media de la fase por símbolo OFDM. "
+        "slope = 2π·fD·Tsym; crece con fD o con símbolos más largos (SCS menor). "
+        "Si no se compensa, rotaciones grandes desalinean precoder/igualador y pueden degradar las métricas."
+    )
+    fig.text(0.01, 0.01, expl, ha="left", va="bottom", fontsize=9, wrap=True)
+
+    plt.tight_layout(rect=[0, 0.06, 1, 0.96])
+    out = out_dir / f"Doppler_slope_ALL_{int(freq_mhz)}MHz.png"
+    fig.savefig(out, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+
+
 def main():
     print(f"[INFO] Guardando resultados en: {OUT_DIR}")
 
@@ -1321,6 +1517,11 @@ def main():
         plot_trajectories_xy_xz(r["tracks"], out_path=out_traj, title_prefix=title,
                                step_stride=5, show_step_labels=False)
         
+
+    for f in FREQS_MHZ:
+        plot_fd_all_ues_onefig(df_all, f, OUT_DIR)
+        plot_nu_tc_all_ues_onefig(df_all, f, OUT_DIR)
+        plot_slope_all_ues_onefig(df_all, f, OUT_DIR)
 
     
 
