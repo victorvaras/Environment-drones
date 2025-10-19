@@ -102,34 +102,105 @@ def load_builtin_scene(name: str = "munich",
 
 
 def tf_unwrap_phase(phi: tf.Tensor) -> tf.Tensor:
-    """
-    Unwrap 1D phase array (rad) en TF graph mode.
-    phi: [T] float tensor
-    return: [T] float tensor
-    """
     two_pi = tf.constant(2.0*np.pi, dtype=phi.dtype)
-    d = phi[1:] - phi[:-1]                       # incrementos
-    d_adj = d - two_pi * tf.round(d / two_pi)    # normalizar a (-pi, pi]
+    d = phi[1:] - phi[:-1]
+    d_adj = d - two_pi * tf.round(d / two_pi)
     phi0 = phi[0:1]
     phi_tail = phi0 + tf.cumsum(d_adj)
     return tf.concat([phi0, phi_tail], axis=0)
 
-def debug_phase_slope(h: tf.Tensor,
-                      ofdm_symbol_duration: float,
-                      ut=0, ua=0, bs=0, ba=0, f0=10, tag="[SYS DEBUG]"):
-    """
-    h: [num_ut, num_ut_ant, num_bs, num_bs_ant, T, F] complejo64
-    """
-    x = h[ut, ua, bs, ba, :, f0]                 # [T]
-    phi = tf.math.angle(x)                       # fase envuelta
-    phi_unw = tf_unwrap_phase(phi)               # desenrollada (sin tf.math.unwrap)
+def _slope_and_fd_for_one_f(x_t: tf.Tensor, Tsym: tf.Tensor):
+    phi = tf.math.angle(x_t)
+    phi_unw = tf_unwrap_phase(phi)
     T = tf.shape(phi_unw)[0]
     slope = (phi_unw[-1] - phi_unw[0]) / tf.cast(tf.maximum(1, T-1), tf.float32)  # rad/símb
-
-    Tsym = tf.convert_to_tensor(ofdm_symbol_duration, tf.float32)  # seg/símb
     two_pi = tf.constant(2.0*np.pi, tf.float32)
-    fD_est = slope / (two_pi * Tsym)             # Hz
-    tf.print(tag, "T=", T, "F=", tf.shape(h)[-1], "slope(rad/sym)=", slope, "fD_est(Hz)=", fD_est)
+    fD = slope / (two_pi * Tsym)  # Hz
+    return slope, fD
+
+def _median_1d(x: tf.Tensor):
+    x_sorted = tf.sort(x, axis=0)
+    n = tf.shape(x_sorted)[0]
+    mid = n // 2
+    return tf.cond(
+        tf.equal(n % 2, 1),
+        lambda: x_sorted[mid],
+        lambda: 0.5*(x_sorted[mid-1] + x_sorted[mid])
+    )
+
+def doppler_metrics_multi(
+    h: tf.Tensor,                       # [UT, Uant, BS, Bant, T, F] complex64
+    ofdm_symbol_duration_s: float,      # Tsym (s)
+    scs_hz: float,                      # SCS (Hz)
+    f_indices: tuple = (5, 20, 40, 60, 80, 100),
+    avg_over_antennas: bool = True,     # promediar sobre Uant/Bant
+    use_median_over_f: bool = True,     # mediana sobre subportadoras elegidas
+):
+    Tsym = tf.convert_to_tensor(ofdm_symbol_duration_s, tf.float32)
+    scs  = tf.convert_to_tensor(scs_hz, tf.float32)
+
+    # Promedio sobre antenas si quieres robustez: [UT, BS, T, F]
+    if avg_over_antennas:
+        H = tf.reduce_mean(h, axis=(1,3))  # [UT, BS, T, F]
+        has_ant = False
+    else:
+        H = h                               # [UT, Uant, BS, Bant, T, F]
+        has_ant = True
+
+    num_ut = tf.shape(h)[0]
+    num_bs = tf.shape(h)[2]
+
+    slope_ut_bs = tf.TensorArray(tf.float32, size=num_ut*num_bs)
+    fD_ut_bs    = tf.TensorArray(tf.float32, size=num_ut*num_bs)
+
+    idx = 0
+    for ut in tf.range(num_ut):
+        for bs in tf.range(num_bs):
+            slopes_f = []
+            fDs_f    = []
+            for f0 in f_indices:
+                if has_ant:
+                    # promedio sobre antenas si no se promedió antes
+                    uaN = tf.shape(h)[1]; baN = tf.shape(h)[3]
+                    s_list = []; f_list = []
+                    for ua in tf.range(uaN):
+                        for ba in tf.range(baN):
+                            x_t = H[ut, ua, bs, ba, :, f0]
+                            s, fd = _slope_and_fd_for_one_f(x_t, Tsym)
+                            s_list.append(s); f_list.append(fd)
+                    slope = tf.reduce_mean(tf.stack(s_list))
+                    fD    = tf.reduce_mean(tf.stack(f_list))
+                else:
+                    x_t = H[ut, bs, :, f0]   # [T]
+                    slope, fD = _slope_and_fd_for_one_f(x_t, Tsym)
+
+                slopes_f.append(slope)
+                fDs_f.append(fD)
+
+            slopes_f = tf.stack(slopes_f)  # [K]
+            fDs_f    = tf.stack(fDs_f)     # [K]
+
+            slope_agg = _median_1d(slopes_f) if use_median_over_f else tf.reduce_mean(slopes_f)
+            fD_agg    = _median_1d(fDs_f)    if use_median_over_f else tf.reduce_mean(fDs_f)
+
+            slope_ut_bs = slope_ut_bs.write(idx, slope_agg)
+            fD_ut_bs    = fD_ut_bs.write(idx,    fD_agg)
+            idx += 1
+
+    slope_ut_bs = tf.reshape(slope_ut_bs.stack(), [num_ut, num_bs])   # [UT, BS]
+    fD_ut_bs    = tf.reshape(fD_ut_bs.stack(),    [num_ut, num_bs])   # [UT, BS]
+    nu_ut_bs    = fD_ut_bs / scs                                      # [UT, BS]
+    Tc_ut_bs    = tf.where(tf.abs(fD_ut_bs) > 1e-9,
+                           tf.constant(0.423, tf.float32)/tf.abs(fD_ut_bs),
+                           tf.constant(1e9, tf.float32))
+
+    return {
+        "slope_rad_per_sym_ut_bs": slope_ut_bs,  # [UT, BS]
+        "fD_est_hz_ut_bs":         fD_ut_bs,     # [UT, BS]
+        "nu_ut_bs":                nu_ut_bs,     # [UT, BS]
+        "Tc_seconds_ut_bs":        Tc_ut_bs,     # [UT, BS]
+        "f_indices":               tf.convert_to_tensor(f_indices, tf.int32),
+    }
 
 
 
@@ -181,12 +252,12 @@ class SionnaRT:
                  specular_reflection: bool = True,# Reflexiones especulares (reflexiones tipo espejo)
                  diffuse_reflection: bool = True, # Reflexiones difusas, por superficies rugosas (muy costoso, realista)
                  refraction: bool = True,         # Refracción (atravesar vidrios, etc. cambiar angulo y atenuar)
-                 diffraction: bool = True,  # Difracción, activador general
-                 edge_diffraction: bool = True,  # Difracción en aristas y esquinas
-                 diffraction_lit_region: bool = True,
+                 diffraction: bool = False,  # Difracción, activador general
+                 edge_diffraction: bool = False,  # Difracción en aristas y esquinas
+                 diffraction_lit_region: bool = False,
                  synthetic_array: bool = False,   # True: matriz sintética (rápido); False: por elemento (en false realista)
-                 samples_per_src: int | None = 500_000,    # Nº de rayos por fuente (default 1,000,000)
-                 max_num_paths_per_src: int | None = None,  # Tope de caminos por fuente (None => default) (default 1000000)
+                 samples_per_src: int = 500_000,    # Nº de rayos por fuente (default 1,000,000)
+                 max_num_paths_per_src: int = 500_000,  # Tope de caminos por fuente (None => default) (default 1000000)
                  seed: int = 41,                   # Semilla del muestreo estocástico
 
 
@@ -206,7 +277,7 @@ class SionnaRT:
 
                 #num_ut: int = None,     # si ya lo recibes, mantenlo; si no, se infiere más abajo
                 doppler_enabled: bool = False,           # bandera global para activar/desactivar Doppler
-                drone_velocity_mps: tuple[float, float, float] = (60.0, 0.0, 0.0),  # vx, vy, vz del dron en m/s
+                drone_velocity_mps: tuple[float, float, float] = (0.0, 0.0, 0.0),  # vx, vy, vz del dron en m/s
                 rx_velocities_mps: list[tuple[float, float, float]] | None = None, 
                ):
 
@@ -437,9 +508,12 @@ class SionnaRT:
         assert self.scene is not None, "build_scene() no fue llamado."
         self.rx_list = []
         for i, p in enumerate(rx_positions_xyz):
+            
             rx = Receiver(name=f"RX_{i}",
                           position=[float(p[0]), float(p[1]), float(p[2])],
-                          display_radius=1.5, color=(0, 0, 0))
+                          display_radius=1.5, color=(0, 0, 0),
+                          velocity = [0, 0, 0]
+                          )
             self.scene.add(rx)
             self.rx_list.append(rx)
 
@@ -554,7 +628,8 @@ class SionnaRT:
                 rm = rm_solver(scene=self.scene,
                                max_depth=self.max_depth,
                                cell_size=[1, 1],
-                               samples_per_tx=10 ** 5,
+                               los=self.los,
+                               samples_per_tx=self.max_num_paths_per_src,
                                specular_reflection=self.specular_reflection,
                                diffuse_reflection=self.diffuse_reflection,
                                refraction=self.refraction,
@@ -609,13 +684,15 @@ class SionnaRT:
         EPS_NO = tf.constant(1e-18, tf.float32)
         no = tf.maximum(no, EPS_NO)
 
-        # --- DEBUG DOPPLER: pendiente de fase por símbolo ---
-        debug_phase_slope(
+        # --- DOPPLER por-UT (y BS) ---
+        metrics_Doppler = doppler_metrics_multi(
             h,
-            ofdm_symbol_duration=float(self.resource_grid.ofdm_symbol_duration),
-            ut=0, ua=0, bs=0, ba=0, f0=10, tag="[SYS DEBUG]"
+            ofdm_symbol_duration_s=float(self.resource_grid.ofdm_symbol_duration),
+            scs_hz=float(self.subcarrier_spacing),
+            f_indices=(5, 20, 40, 60, 80, 100),
+            avg_over_antennas=True,
+            use_median_over_f=True,        
         )
-
 
         # --- Ganancia de canal y tasa Shannon estimada (para scheduler PF) ---
         # h: [num_ut, num_ut_ant, num_bs, num_bs_ant, T, F]
@@ -752,9 +829,9 @@ class SionnaRT:
        
         return (
             harq_feedback, sinr_eff_feedback, num_decoded_bits,
-            se_la, se_shannon, sinr_eff_db_true, 
-            tbler_step_per_ue,  
-            step_blocks, harq_feedback_masked
+            se_la, se_shannon, sinr_eff_db_true,
+            tbler_step_per_ue,
+            step_blocks, harq_feedback_masked, metrics_Doppler
         )
 
 
@@ -781,7 +858,9 @@ class SionnaRT:
         sinr_eff_db_true,
         tbler_per_user,            # << renombrado (antes bler_per_user)
         step_blocks,
-        harq_feedback_masked) = self.sys_step(
+        harq_feedback_masked,
+        metrics_Doppler
+        ) = self.sys_step(
             h=h,
             harq_feedback=self.harq_feedback,
             sinr_eff_feedback=self.sinr_eff_feedback,
@@ -813,6 +892,12 @@ class SionnaRT:
             self.bits_acc_total[i] += int(bits_np[i])
 
        
+        # ---- Doppler por-UE (BS=0) para guardar en info/plots ----
+        fD_ut_bs    = metrics_Doppler["fD_est_hz_ut_bs"].numpy()[:, 0]          # [num_ut]
+        slope_ut_bs = metrics_Doppler["slope_rad_per_sym_ut_bs"].numpy()[:, 0]  # [num_ut]
+        nu_ut_bs    = metrics_Doppler["nu_ut_bs"].numpy()[:, 0]                 # [num_ut]
+        Tc_ut_bs    = metrics_Doppler["Tc_seconds_ut_bs"].numpy()[:, 0]         # [num_ut]
+
 
         # ---------- Métricas por-UE ----------
         ue_metrics = []
@@ -843,6 +928,12 @@ class SionnaRT:
 
                 # Métrica TBLER del step por UE (0/1/NaN si no transmitió)
                 "tbler": float(tbler_np[i]), #
+
+                # --- NUEVO: DOPPLER por UE ---
+                "doppler_fd_hz": float(fD_ut_bs[i]),
+                "doppler_slope_rad_per_sym": float(slope_ut_bs[i]),
+                "doppler_nu_fd_over_scs": float(nu_ut_bs[i]),
+                "doppler_Tc_seconds": float(Tc_ut_bs[i]),
             })
 
         
