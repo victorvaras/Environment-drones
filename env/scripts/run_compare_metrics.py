@@ -518,7 +518,7 @@ def plot_all_metrics_combined(df_all: pd.DataFrame, out_dir: Path):
     - Título incluye UE y 'freqs: ...'
     - SE (Shannon vs SE-LA) ocupa el doble de altura (GridSpec con ratios)
     - 'Step' en TODOS los subplots
-    - Anti-solape entre frecuencias (offset en X + estilos)
+    - Leyendas debajo de cada subplot (una por subplot, no global)
     """
     ue_ids = sorted(df_all["ue_id"].dropna().astype(int).unique().tolist())
     freqs = sorted(df_all["freq_mhz"].dropna().unique().tolist())
@@ -526,19 +526,18 @@ def plot_all_metrics_combined(df_all: pd.DataFrame, out_dir: Path):
     freqs_str = ", ".join([label_for[f] for f in freqs])
 
     for ue in ue_ids:
-        # GridSpec: 4 filas, 2 columnas; fila 2 (índice 1) ocupa doble altura
-        fig = plt.figure(figsize=(13, 10))
-        gs = GridSpec(nrows=4, ncols=2, height_ratios=[1.1, 2.4, 1.3, 0.3], hspace=0.35, wspace=0.28)
+        # --- Más espacio vertical para las leyendas
+        fig = plt.figure(figsize=(13, 12))
+        gs = GridSpec(nrows=4, ncols=2, height_ratios=[1.1, 2.4, 1.3, 0.3], hspace=1.4, wspace=0.32)
 
-        ax_prx   = fig.add_subplot(gs[0, 0])      # PRx
-        ax_sinr  = fig.add_subplot(gs[0, 1])      # SINR
-        ax_se    = fig.add_subplot(gs[1, :])      # SE combinado (doble altura)
-        ax_tbl_s = fig.add_subplot(gs[2, 0])      # TBLER step
-        ax_tbl_r = fig.add_subplot(gs[2, 1])      # TBLER running
-        ax_dummy = fig.add_subplot(gs[3, :])      # (opcional) libre si quieres algo más
+        ax_prx   = fig.add_subplot(gs[0, 0])  # PRx
+        ax_sinr  = fig.add_subplot(gs[0, 1])  # SINR
+        ax_se    = fig.add_subplot(gs[1, :])  # SE combinado (doble altura)
+        ax_tbl_s = fig.add_subplot(gs[2, 0])  # TBLER step
+        ax_tbl_r = fig.add_subplot(gs[2, 1])  # TBLER running
+        ax_dummy = fig.add_subplot(gs[3, :])  # espacio libre
         ax_dummy.axis("off")
 
-        # Para límites con padding
         y_collect = {k: [] for k in ["prx", "sinr", "se", "tbl_s", "tbl_r"]}
 
         for j, f in enumerate(freqs):
@@ -546,7 +545,6 @@ def plot_all_metrics_combined(df_all: pd.DataFrame, out_dir: Path):
             x = df_f["step"].to_numpy(dtype=float)
             x_off = x + _X_OFFSETS[j % len(_X_OFFSETS)]
 
-            
             # PRx (medido)
             y = df_f["prx_dbm"].to_numpy(dtype=float)
             ax_prx.plot(x_off, y, marker=_MARKERS[j % len(_MARKERS)],
@@ -554,12 +552,9 @@ def plot_all_metrics_combined(df_all: pd.DataFrame, out_dir: Path):
                         label=label_for[f])
             y_collect["prx"].append(y[~np.isnan(y)])
 
-            # PRx TEÓRICO (cota)  <<<< NUEVO
+            # PRx teórico
             y_th = df_f["prx_dbm_theo"].to_numpy(dtype=float)
-            ax_prx.plot(x_off, y_th,
-                        marker=None,
-                        linestyle=":",
-                        linewidth=2.0,
+            ax_prx.plot(x_off, y_th, linestyle=":", linewidth=2.0,
                         label=f"{label_for[f]} · Teórico")
             y_collect["prx"].append(y_th[~np.isnan(y_th)])
 
@@ -594,48 +589,56 @@ def plot_all_metrics_combined(df_all: pd.DataFrame, out_dir: Path):
                           label=label_for[f])
             y_collect["tbl_r"].append(y[~np.isnan(y)])
 
-        # Etiquetas y formato
+        # === Títulos y etiquetas ===
         ax_prx.set_title("PRx (dBm)")
         ax_sinr.set_title("SINR (dB)")
         ax_se.set_title("SE — Shannon (cota) vs SE-LA (real)")
         ax_tbl_s.set_title("TBLER (por step)")
         ax_tbl_r.set_title("TBLER running")
 
-        ax_prx.set_ylabel("PRx (dBm)")
-        ax_sinr.set_ylabel("SINR (dB)")
-        ax_se.set_ylabel("SE (b/s/Hz)")
-        ax_tbl_s.set_ylabel("TBLER")
-        ax_tbl_r.set_ylabel("TBLER")
-
-        # 'Step' en TODOS los subplots solicitados
-        for ax in [ax_prx, ax_sinr, ax_se, ax_tbl_s, ax_tbl_r]:
+        for ax, ylabel in zip(
+            [ax_prx, ax_sinr, ax_se, ax_tbl_s, ax_tbl_r],
+            ["PRx (dBm)", "SINR (dB)", "SE (b/s/Hz)", "TBLER", "TBLER"]
+        ):
+            ax.set_ylabel(ylabel)
             ax.set_xlabel("Step")
+            ax.grid(True, linestyle="--", alpha=0.35)
+            ax.set_axisbelow(True)
 
-        # Formato y límites
         _axis_format_db(ax_prx)
         _axis_format_db(ax_sinr)
+
+        # === Padding dinámico ===
         for key, ax in [("prx", ax_prx), ("sinr", ax_sinr), ("se", ax_se), ("tbl_s", ax_tbl_s), ("tbl_r", ax_tbl_r)]:
             flat = np.concatenate([v for v in y_collect[key] if v.size > 0]) if any(len(v) > 0 for v in y_collect[key]) else np.array([])
             if flat.size > 0:
                 y_min, y_max = np.nanmin(flat), np.nanmax(flat)
                 pad = max(0.05, 0.08 * (y_max - y_min if y_max > y_min else 1.0))
                 ax.set_ylim(y_min - pad, y_max + pad)
-            ax.grid(True, linestyle="--", alpha=0.35)
 
-        # Leyenda global (sin duplicados)
-        handles, labels = [], []
-        for ax in (ax_prx, ax_sinr, ax_se, ax_tbl_s, ax_tbl_r):
+        # === Leyendas debajo de cada subplot ===
+        def add_legend_below(ax, dy=-0.38):
             h, l = ax.get_legend_handles_labels()
-            handles += h; labels += l
-        seen = set(); H, L = [], []
-        for h, l in zip(handles, labels):
-            if l not in seen:
-                H.append(h); L.append(l); seen.add(l)
-        fig.legend(H, L, loc="lower center", ncol=min(6, max(2, len(L)//2)),
-                   frameon=False, bbox_to_anchor=(0.5, 0.02))
+            if h:
+                ax.legend(
+                    h, l,
+                    loc="upper center",
+                    bbox_to_anchor=(0.5, dy),
+                    frameon=False,
+                    ncol=min(3, max(1, len(l) // 2)),
+                    fontsize=9
+                )
 
+        # Las normales
+        for ax in [ax_prx, ax_sinr, ax_tbl_s, ax_tbl_r]:
+            add_legend_below(ax, dy=-0.38)
+
+        # La SE (más alta)
+        add_legend_below(ax_se, dy=-0.25)
+
+        # Ajuste global
+        fig.subplots_adjust(top=0.94, bottom=0.08, left=0.07, right=0.97, hspace=1.6)
         fig.suptitle(f"UE {ue} — freqs: {freqs_str}", fontsize=14, y=0.995)
-        fig.tight_layout(rect=[0.04, 0.08, 0.98, 0.97])
 
         out_file = out_dir / f"UE{ue}_all_metrics.png"
         fig.savefig(out_file, dpi=180, bbox_inches="tight")
@@ -658,8 +661,9 @@ def plot_all_metrics_single_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir:
     has_prx_theo = "prx_dbm_theo" in df_f_all.columns
 
     for ue in ue_ids:
-        fig = plt.figure(figsize=(13, 10))
-        gs = GridSpec(nrows=4, ncols=2, height_ratios=[1.1, 2.4, 1.3, 0.3], hspace=0.35, wspace=0.28)
+        # Figura con más separación vertical (sin tight_layout)
+        fig = plt.figure(figsize=(13, 11))
+        gs = GridSpec(nrows=4, ncols=2, height_ratios=[1.1, 2.4, 1.3, 0.3], hspace=1.3, wspace=0.32)
         ax_prx   = fig.add_subplot(gs[0, 0])
         ax_sinr  = fig.add_subplot(gs[0, 1])
         ax_se    = fig.add_subplot(gs[1, :])
@@ -674,31 +678,27 @@ def plot_all_metrics_single_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir:
         y_prx = df_f["prx_dbm"].to_numpy(dtype=float)
         line_meas, = ax_prx.plot(x, y_prx, marker="o", linestyle="-", linewidth=1.8, label=label)
 
-        # Cota teórica si existe
         if has_prx_theo:
             y_th = df_f["prx_dbm_theo"].to_numpy(dtype=float)
             ax_prx.plot(x, y_th, linestyle=":", linewidth=2.0,
                         color=line_meas.get_color(), label=f"{label} · Teórico")
 
         # ========= SINR =========
-        y = df_f["sinr_eff_db"].to_numpy(dtype=float)
-        ax_sinr.plot(x, y, marker="o", linestyle="-", linewidth=1.8, label=label)
+        ax_sinr.plot(x, df_f["sinr_eff_db"], marker="o", linestyle="-", linewidth=1.8, label=label)
 
-        # ========= SE combinado =========
+        # ========= SE =========
         y_sh = df_f["se_shannon"].to_numpy(dtype=float)
         y_la = df_f["se_la"].to_numpy(dtype=float)
         ax_se.plot(x, y_sh, marker="o", linestyle="-",  linewidth=1.9, label=f"{label} · Shannon")
         ax_se.plot(x, y_la, marker="s", linestyle="--", linewidth=1.7, label=f"{label} · SE-LA")
 
         # ========= TBLER step =========
-        y = df_f["tbler_step"].to_numpy(dtype=float)
-        ax_tbl_s.plot(x, y, marker="o", linestyle="-", linewidth=1.8, label=label)
+        ax_tbl_s.plot(x, df_f["tbler_step"], marker="o", linestyle="-", linewidth=1.8, label=label)
 
         # ========= TBLER running =========
-        y = df_f["tbler_running"].to_numpy(dtype=float)
-        ax_tbl_r.plot(x, y, marker="o", linestyle="-", linewidth=1.8, label=label)
+        ax_tbl_r.plot(x, df_f["tbler_running"], marker="o", linestyle="-", linewidth=1.8, label=label)
 
-        # Títulos / labels / grilla
+        # === Configuración de ejes ===
         ax_prx.set_title("PRx (dBm)");            ax_prx.set_ylabel("PRx (dBm)")
         ax_sinr.set_title("SINR (dB)");           ax_sinr.set_ylabel("SINR (dB)")
         ax_se.set_title("SE — Shannon (cota) vs SE-LA (real)"); ax_se.set_ylabel("SE (b/s/Hz)")
@@ -710,9 +710,10 @@ def plot_all_metrics_single_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir:
             ax.grid(True, linestyle="--", alpha=0.35)
             ax.set_axisbelow(True)
 
-        _axis_format_db(ax_prx); _axis_format_db(ax_sinr)
+        _axis_format_db(ax_prx)
+        _axis_format_db(ax_sinr)
 
-        # Límites con padding
+        # === Límites con padding ===
         def _pad(ax, *arrays):
             vals = []
             for a in arrays:
@@ -731,20 +732,30 @@ def plot_all_metrics_single_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir:
         _pad(ax_tbl_s, df_f["tbler_step"].to_numpy(dtype=float))
         _pad(ax_tbl_r, df_f["tbler_running"].to_numpy(dtype=float))
 
-        # Leyenda global
-        handles, labels = [], []
-        for ax in (ax_prx, ax_sinr, ax_se, ax_tbl_s, ax_tbl_r):
+        # === Leyendas debajo de cada subplot ===
+        def add_legend_below(ax, dy=-0.42):
             h, l = ax.get_legend_handles_labels()
-            handles += h; labels += l
-        seen = set(); H, L = [], []
-        for h, l in zip(handles, labels):
-            if l not in seen:
-                H.append(h); L.append(l); seen.add(l)
+            if h:
+                ax.legend(
+                    h, l,
+                    loc="upper center",
+                    bbox_to_anchor=(0.5, dy),
+                    frameon=False,
+                    ncol=2,
+                    fontsize=9
+                )
 
-        fig.legend(H, L, loc="lower center", ncol=3, frameon=False, bbox_to_anchor=(0.5, 0.02))
+        # Ajuste más fino de las leyendas (SE más pegada)
+        for ax in [ax_prx, ax_sinr, ax_tbl_s, ax_tbl_r]:
+            add_legend_below(ax, dy=-0.42)
+
+        # La de SE va más arriba porque la gráfica es más alta
+        add_legend_below(ax_se, dy=-0.25)
+
+        # === Ajuste global de márgenes ===
+        fig.subplots_adjust(top=0.94, bottom=0.08, left=0.07, right=0.97, hspace=1.6)
 
         fig.suptitle(f"UE {ue} — freq: {label}", fontsize=14, y=0.995)
-        fig.tight_layout(rect=[0.04, 0.08, 0.98, 0.97])
 
         out_file = out_dir / f"UE{ue}_all_metrics_{int(freq_mhz)}MHz.png"
         fig.savefig(out_file, dpi=180, bbox_inches="tight")
@@ -986,7 +997,7 @@ def plot_all_ues_se_comparison(df_all: pd.DataFrame, freq_mhz: float, out_dir: P
         fig.delaxes(axes[j])
 
     # Título general
-    title = f"Eficiencia espectral (Teórica vs Real)— Frecuencia: {freq_mhz:.0f} MHz"
+    title = f"Eficiencia espectral (Teórica vs Real) — Frecuencia: {freq_mhz:.0f} MHz"
     fig.suptitle(title, fontsize=13, y=0.98)
 
     # Leyenda global
@@ -1188,9 +1199,7 @@ def plot_all_ues_metrics_by_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir:
     """
     Genera una figura por métrica (PRx, SINR, SE, TBLER-step, TBLER-running),
     donde cada figura muestra las curvas de todos los UEs para la frecuencia indicada.
-    Guarda las imágenes en la subcarpeta 'metricas-totales-por-frecuencia',
-    la cual ya debe existir antes de llamar esta función.
-    La leyenda se coloca fuera del gráfico en una posición común.
+    Usa desplazamientos y estilos distintos por UE para evitar solapamientos.
     """
     df_f = df_all[np.isclose(df_all["freq_mhz"], freq_mhz)].copy()
     if df_f.empty:
@@ -1235,16 +1244,29 @@ def plot_all_ues_metrics_by_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir:
 
         fig, ax = plt.subplots(figsize=(10, 5))
 
-        for ue in ue_ids:
+        for j, ue in enumerate(ue_ids):
             dfx = df_f[df_f["ue_id"] == ue].sort_values("step")
-            ax.plot(dfx["step"], dfx[metric], marker="o", linewidth=1.8, label=f"UE {ue}")
+
+            # ✅ Desplazamiento y estilos distintos por UE
+            x_offset = _X_OFFSETS[j % len(_X_OFFSETS)]
+            x = dfx["step"].to_numpy(dtype=float) + x_offset
+            y = dfx[metric].to_numpy(dtype=float)
+
+            ax.plot(
+                x, y,
+                marker=_MARKERS[j % len(_MARKERS)],
+                linestyle=_LINESTY[j % len(_LINESTY)],
+                linewidth=1.8,
+                markersize=5,
+                label=f"UE {ue}"
+            )
 
         ax.set_xlabel("Step")
         ax.set_ylabel(cfg["ylabel"])
-        ax.set_title(f"{cfg['title']} — {freq_mhz:.0f} MHz")
+        ax.set_title(f"{cfg['title']} — {freq_mhz:.0f} MHz", pad=10)
         ax.grid(True, linestyle="--", alpha=0.4)
 
-        # ✅ Leyenda fuera del gráfico, posición fija para todas las imágenes
+        # ✅ Leyenda fuera del gráfico, común a todas las métricas
         ax.legend(
             loc="center left",
             bbox_to_anchor=(1.02, 0.5),
@@ -1253,7 +1275,9 @@ def plot_all_ues_metrics_by_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir:
             title="Usuarios (UE)"
         )
 
+        # Ajuste de layout para dejar espacio a la leyenda
         fig.tight_layout(rect=[0, 0, 0.85, 1])
+
         out_path = out_dir / cfg["filename"]
         fig.savefig(out_path, dpi=180, bbox_inches="tight")
         plt.close(fig)
