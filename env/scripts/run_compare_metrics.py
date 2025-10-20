@@ -76,7 +76,8 @@ OUT_DIR_UE_all_METRICS.mkdir(parents=True, exist_ok=True)
 OUT_DIR_FREQ_METRICS = OUT_DIR / "metricas-totales-por-frecuencia"
 OUT_DIR_FREQ_METRICS.mkdir(parents=True, exist_ok=True)
 
-
+OUT_DIR_DOPPLER = OUT_DIR / "doppler-metrics"
+OUT_DIR_DOPPLER.mkdir(parents=True, exist_ok=True)
 
 
 def _scalar_float(x):
@@ -1206,8 +1207,7 @@ def plot_all_ues_metrics_by_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir:
         print(f"[WARN] No hay datos para {freq_mhz} MHz")
         return
 
-    ue_ids = sorted(df_f["ue_id"].unique())
-    print(f"[INFO] Generando métricas para frecuencia {freq_mhz} MHz con {len(ue_ids)} UEs")
+    ue_ids = sorted(df_f["ue_id"].unique())    
 
     metrics = {
         "prx_dbm": {
@@ -1282,7 +1282,6 @@ def plot_all_ues_metrics_by_freq(df_all: pd.DataFrame, freq_mhz: float, out_dir:
         fig.savefig(out_path, dpi=180, bbox_inches="tight")
         plt.close(fig)
 
-        print(f"[OK] Guardado: {out_path.name}")
 
 
 # ------ doppler ------
@@ -1520,11 +1519,9 @@ def main():
         
     #Doppler
     for f in FREQS_MHZ:
-        plot_fd_all_ues_onefig(df_all, f, OUT_DIR)
-        plot_nu_tc_all_ues_onefig(df_all, f, OUT_DIR)
-        plot_slope_all_ues_onefig(df_all, f, OUT_DIR)
-
-    
+        plot_fd_all_ues_onefig(df_all, f, OUT_DIR_DOPPLER)
+        plot_nu_tc_all_ues_onefig(df_all, f, OUT_DIR_DOPPLER)
+        plot_slope_all_ues_onefig(df_all, f, OUT_DIR_DOPPLER)
 
 
     print(f"[DONE] Imágenes en: {OUT_DIR}")
