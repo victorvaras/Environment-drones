@@ -61,7 +61,7 @@ FREQ_LABELS = [f"{f:.0f} MHz" for f in FREQS_MHZ]
 # Carpeta de salida con timestamp
 RUN_TAG = datetime.now().strftime("%Y%m%d-%H%M%S")
 #OUT_DIR = Path(project_root) / "outputs" / f"compare_metrics_{RUN_TAG}"
-OUT_DIR = Path(project_root) / "outputs-pruebas-doppler-2" / f"compare_metrics_{RUN_TAG}"
+OUT_DIR = Path(project_root) / "Pruebas Nan" / f"compare_metrics_{RUN_TAG}"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 OUT_DIR_RECEPTORS = OUT_DIR / "receptors-metrics"
@@ -1483,10 +1483,10 @@ def main():
     (OUT_DIR / "compare_metrics_all.csv").write_text(df_all.to_csv(index=False))
 
 
-    # total meticas por receptor y frecuencia
+    #Total de metricas por receptor y frecuencia combinadas
     plot_all_metrics_combined(df_all, OUT_DIR)
 
-    
+    #Metricas por usuario
     plot_metric_per_ue(df_all, metric="prx_dbm",       ylabel="PRx (dBm)",            out_dir=OUT_DIR_UE_METRICS)
     plot_metric_per_ue(df_all, metric="sinr_eff_db",   ylabel="SINR efectivo (dB)",   out_dir=OUT_DIR_UE_METRICS)
     plot_metric_per_ue(df_all, metric="se_la",         ylabel="SE (LA) [bits/s/Hz]",  out_dir=OUT_DIR_UE_METRICS)
@@ -1498,15 +1498,16 @@ def main():
     
     # plots totales por frecuencia
     for f in FREQS_MHZ:
-       plot_all_metrics_single_freq(df_all, f, OUT_DIR_UE_all_METRICS)
-       plot_all_ues_metrics_by_freq(df_all, f, OUT_DIR_FREQ_METRICS)
+       plot_all_metrics_single_freq(df_all, f, OUT_DIR_UE_all_METRICS) #Metricas totales por usuario y frecuencia
+       plot_all_ues_metrics_by_freq(df_all, f, OUT_DIR_FREQ_METRICS) #Metricas totales por frecuencia
 
+    #Receptors metrics
     for f in FREQS_MHZ:
-        plot_all_ues_prx_by_freq(df_all, f, OUT_DIR_RECEPTORS)                # solo prx
+        plot_all_ues_prx_by_freq(df_all, f, OUT_DIR_RECEPTORS)                #Solo PRx
         plot_all_ues_se_comparison(df_all, f, OUT_DIR_RECEPTORS)
-        plot_all_ues_sinr_by_freq(df_all, f, OUT_DIR_RECEPTORS)               # solo sinr
-        plot_all_ues_tbler_step_by_freq(df_all, f, OUT_DIR_RECEPTORS)        # solo step
-        plot_all_ues_tbler_running_by_freq(df_all, f, OUT_DIR_RECEPTORS)     # solo running
+        plot_all_ues_sinr_by_freq(df_all, f, OUT_DIR_RECEPTORS)               #Solo SINR
+        plot_all_ues_tbler_step_by_freq(df_all, f, OUT_DIR_RECEPTORS)         #Solo TBLER step
+        plot_all_ues_tbler_running_by_freq(df_all, f, OUT_DIR_RECEPTORS)      #Solo TBLER running
 
     # mapas XY+XZ por frecuencia
     for r in runs:
@@ -1516,7 +1517,7 @@ def main():
         plot_trajectories_xy_xz(r["tracks"], out_path=out_traj, title_prefix=title,
                                step_stride=5, show_step_labels=False)
         
-
+    #Doppler
     for f in FREQS_MHZ:
         plot_fd_all_ues_onefig(df_all, f, OUT_DIR_DOPPLER)
         plot_nu_tc_all_ues_onefig(df_all, f, OUT_DIR_DOPPLER)
