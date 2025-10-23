@@ -221,7 +221,7 @@ class SionnaRT:
 
                  # --- RF / ruido ---
                  frequency_mhz: float = 7000.0,   # Frecuencia portadora [MHz] #7000 doppler
-                 tx_power_dbm: float = 40.0,      # Potencia TOTAL objetivo [dBm] (se reparte si hay sectores) #8 doppler
+                 tx_power_dbm: float = 20.0,      # Potencia TOTAL objetivo [dBm] (se reparte si hay sectores) #8 doppler
 
                  # --- escena: nombre integrado o ruta a XML/carpeta ---
                  scene_name: str = "munich",
