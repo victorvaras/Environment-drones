@@ -67,12 +67,19 @@ class DroneEnv(gym.Env):
         self.rt.build_scene()
         self.rt.attach_receivers(self.receptores.positions_xyz())
 
+         
+        bounds_min = self.rt.scene_bounds[0]
+        bounds_max = self.rt.scene_bounds[1]
+        bounds = ((bounds_min[0], bounds_max[0]), (bounds_min[1], bounds_max[1]), (bounds_min[2], bounds_max[2]))
+        self.scene_bounds = bounds
+
         # Dron / spaces
-        self.dron = Dron(start_xyz=self._start)
+        self.dron = Dron(start_xyz=self._start, bounds=bounds)
         self.action_space = spaces.Box(low=-5.0, high=5.0, shape=(3,), dtype=np.float32)
         self.observation_space = spaces.Box(
             low=-1e9, high=1e9, shape=(3 + self.receptores.n,), dtype=np.float32
         )
+        self.dron.bounds = bounds
 
         # Estado de render
         self._fig = None
@@ -96,7 +103,7 @@ class DroneEnv(gym.Env):
         super().reset(seed=seed)
         self.step_count = 0
 
-        self.dron = Dron(start_xyz=self._start)
+        self.dron = Dron(start_xyz=self._start, bounds=self.scene_bounds)
         self.rt.move_tx(self.dron.pos)
 
         obs = np.concatenate([self.dron.pos]).astype(np.float32)
@@ -144,21 +151,6 @@ class DroneEnv(gym.Env):
         for rx, pos in zip(self.rt.rx_list, rx_positions):
             rx.position = [float(pos[0]), float(pos[1]), float(pos[2])]
 
-        
-        # === (NUEVO) Velocidades para Doppler en Sionna-RT ===
-        # Si tienes doppler_enabled en tu DroneEnv:
-        """
-        try:
-            self.rt.set_velocities(
-                doppler_enabled=getattr(self, "doppler_enabled", False),
-                drone_velocity_mps=tuple(map(float, getattr(self, "drone_velocity_mps", (0.0, 0.0, 0.0)))),
-                rx_velocities_mps=[tuple(map(float, v)) for v in getattr(self, "rx_velocities_mps", [(0.0, 0.0, 0.0)]*len(self.rt.rx_list))]
-            )
-        except Exception as e:
-            print("[WARN] No se pudieron setear velocidades en RT:", e)
-            
-        """
-        
 
 
         # --- Ejecutar paso SYS y obtener métricas ---
@@ -184,13 +176,17 @@ class DroneEnv(gym.Env):
             "tbler_running_per_ue": sys_metrics.get("tbler_running_per_ue"),  # list[float] tamaño num_ut
 
         }
-
-        self._last_ue_metrics = info["ue_metrics"]  # cache para render
-        self._last_tbler_running_per_ue = info.get("tbler_running_per_ue", None)
-
-        if self.render_mode == "human":
+        
+        if self.render_mode is None:
+            return obs, reward, terminated, truncated, info
+        
+        elif self.render_mode == "human":
+            self._last_ue_metrics = info["ue_metrics"]  # cache para render
+            self._last_tbler_running_per_ue = info.get("tbler_running_per_ue", None)
             self._render_to_figure()
         elif self.render_mode == "rgb_array":
+            self._last_ue_metrics = info["ue_metrics"]  # cache para render
+            self._last_tbler_running_per_ue = info.get("tbler_running_per_ue", None)
             frame = self._render_to_array()
             info["frame"] = frame
 
