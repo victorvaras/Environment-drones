@@ -16,6 +16,7 @@ if str(project_root) not in sys.path:
 from .sionnaEnv import SionnaRT
 from .dron import Dron
 from .receptores import ReceptoresManager, Receptor
+from env.environment.droneVelocityEnv import DroneVelocityEnv, DroneVelocityEnvConfig
 
 
 class DroneEnv(gym.Env):
@@ -81,6 +82,24 @@ class DroneEnv(gym.Env):
         )
         self.dron.bounds = bounds
 
+
+        #Inicializacion para movimiento de dron realista
+        SELECT_MODE = 6  # cambia a 4 o 7 para probar otros
+
+        cfg = DroneVelocityEnvConfig(
+            start_xyz=self._start,
+            start_rpy=(0.0, 0.0, 0.0),
+            control_hz=120,
+            physics_hz=240,
+            mode=SELECT_MODE,
+            render=False,
+            drone_model="cf2x",
+            seed=42,
+            record_trajectory=True,
+        )
+
+        self.dron_Realista = DroneVelocityEnv(cfg)
+
         # Estado de render
         self._fig = None
         self._ax = None
@@ -140,7 +159,32 @@ class DroneEnv(gym.Env):
 
         # Movimiento del dron
         self.dron.step_delta(action)
-        self.rt.move_tx(self.dron.pos)
+        #self.rt.move_tx(self.dron.pos)
+
+        
+
+        if (self.dron_Realista.cfg.mode == 6):
+            posicion = self.dron_Realista.step_mode6_holdz(vx=action[0], vy=action[1], vr=0, dt=0.1, z_ref=self._start[2])
+            movimiento_normalizado = posicion[0]
+
+        elif (self.dron_Realista.cfg.mode == 4):
+            movimiento = [
+                ([action[0], action[1], 0, self._start[2]], 0.1),
+                ]
+            posicion = self.dron_Realista.step_sequence_mode4(movimiento)
+            movimiento_normalizado = posicion[0][0]
+
+        movimiento_valido = self.rt.is_move_valid(self.rt.tx.position, movimiento_normalizado )
+        
+        
+            
+        self.rt.move_tx(movimiento_normalizado)
+        
+        #print("movimiento actual dron:", self.dron.pos, "->", movimiento_normalizado)
+
+
+
+        
 
         # Movimiento de personas
         #Movimiento de personas o receptores
@@ -164,7 +208,11 @@ class DroneEnv(gym.Env):
         obs = np.concatenate([self.dron.pos]).astype(np.float32)
 
         # --- Terminación ---
-        terminated = False
+        if (movimiento_valido):
+            terminated = False
+        else:
+            terminated = True
+            
         truncated = self.step_count >= self.max_steps
 
         info = {

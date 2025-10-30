@@ -1147,4 +1147,87 @@ class SionnaRT:
         ratio = np.maximum(d / float(d0), 1e-12)  # evita log10(0)
         prx_dbm = Pt_dBm + K_dB - 10.0 * float(gamma) * np.log10(ratio)
         return np.asarray(prx_dbm, dtype=float).reshape(-1)
+    
+
+
+
+
+    # validar si un movimiento A->B es válido (sin colisiones)
+    @staticmethod
+    def _np3(p):
+        import numpy as np
+        a = np.asarray(p, dtype=float).reshape(-1)
+        if a.size != 3:
+            raise ValueError("Se esperaban 3 componentes [x,y,z].")
+        return a
+
+    def is_move_valid(
+        self,
+        a, b,
+        radius: float = 0.30,   # radio del dron (m)
+        n_offsets: int = 12,    # muestreo lateral alrededor del eje (0 = solo línea central)
+        eps: float = 1e-3,      # margen numérico para evitar autointersección
+        check_bounds: bool = True
+    ) -> bool:
+        """
+        Devuelve True si el tramo A->B está libre de colisiones (considerando un "tubo" de radio 'radius').
+        Devuelve False si hay intersección con la geometría o si B está fuera de bounds (si check_bounds=True).
+        """
+        import numpy as np
+        import mitsuba as mi
+        import drjit as dr
+
+        if self.scene is None:
+            raise RuntimeError("SionnaRT: scene no está construida. Llama build_scene() antes.")
+
+        a = self._np3(a); b = self._np3(b)
+        d = b - a
+        L = float(np.linalg.norm(d))
+        if L <= 1e-9:
+            return True  # no hay movimiento efectivo
+
+        # Chequeo de límites (si se pide)
+        if check_bounds:
+            if getattr(self, "scene_bounds", None) is not None:
+                pmin, pmax = self.scene_bounds
+            else:
+                pmin, pmax = self.scene_bounds_xyz()
+            pmin = np.asarray(pmin, dtype=float); pmax = np.asarray(pmax, dtype=float)
+            if np.any(b < (pmin - 1e-6)) or np.any(b > (pmax + 1e-6)):
+                return False
+
+        # Convertir a tipos Mitsuba
+        a_mi = mi.Point3f(float(a[0]), float(a[1]), float(a[2]))
+        b_mi = mi.Point3f(float(b[0]), float(b[1]), float(b[2]))
+        dirv  = b_mi - a_mi
+        L_mi  = dr.norm(dirv)
+        dirv  = dirv / L_mi
+
+        # Base ortonormal perpendicular a la dirección
+        up = mi.Vector3f(0.0, 0.0, 1.0)
+        n1 = dr.normalize(dr.cross(dirv, up))
+        # Si casi paralelo a Z, usar otra referencia
+        n1 = dr.select(dr.norm(n1) < 1e-6, dr.normalize(dr.cross(dirv, mi.Vector3f(0, 1, 0))), n1)
+        n2 = dr.normalize(dr.cross(dirv, n1))
+
+        # Offsets circulares para aproximar el radio del dron
+        offsets = [mi.Vector3f(0.0, 0.0, 0.0)]
+        if radius > 0.0 and n_offsets > 0:
+            for k in range(int(n_offsets)):
+                th = 2.0 * np.pi * (k / n_offsets)
+                offsets.append(radius * np.cos(th) * n1 + radius * np.sin(th) * n2)
+
+        mi_scene = self.scene.mi_scene
+        L_lim = float(L) - eps
+
+        # Si cualquier rayo choca, retornamos False
+        for off in offsets:
+            o = a_mi + off + eps * dirv
+            ray = mi.Ray3f(o, dirv)
+            ray.maxt = L_lim
+            if mi_scene.ray_test(ray):
+                return False
+
+        # Ningún rayo intersectó
+        return True
 

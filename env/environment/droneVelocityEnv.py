@@ -241,7 +241,7 @@ class DroneVelocityEnv:
         self,
         vx: float, vy: float, vr: float, dt: float,
         z_ref: Optional[float] = None,
-        kp: float = 2.0, ki: float = 0.3,
+        kp: float = 2.0, ki: float = 0.0,
         vz_limit: float = 8.0,
     ):
         """

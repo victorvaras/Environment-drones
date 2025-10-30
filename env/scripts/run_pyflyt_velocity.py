@@ -28,7 +28,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def main():
-    SELECT_MODE = 7  # cambia a 4 o 7 para probar otros
+    SELECT_MODE = 4  # cambia a 4 o 7 para probar otros
 
     cfg = DroneVelocityEnvConfig(
         start_xyz=(0.0, 0.0, 15.0),
@@ -49,13 +49,14 @@ def main():
             # Modo 4: [u, v, vr, z]  (u,v en cuerpo; z absoluto en mundo)
             seq4 = [
                 ([0.0, 0.0, 0.0, 15.0], 5.0),     # hover en z=5
-                ([5.0, 0.0, 0.0, 15.0], 5.0),     # avanzar en u
-                ([0.0, 5.0, 0.0, 15.0], 5.0),     # derecha y subir a z=6.5
-                ([0.0, 0.0, 0.0, 15.0], 5.0),     # girar en sitio
-                ([-5.0, -5.0, 0.0, 15.0], 5.0),     # bajar a z=5
-                ([0.0, 0.0, 0.0, 15.0], 5.0),
+                #([5.0, 0.0, 0.0, 15.0], 5.0),     # avanzar en u
+                #([0.0, 5.0, 0.0, 15.0], 5.0),     # derecha y subir a z=6.5
+                #([0.0, 0.0, 0.0, 15.0], 5.0),     # girar en sitio
+                #([-5.0, -5.0, 0.0, 15.0], 5.0),     # bajar a z=5
+                #([0.0, 0.0, 0.0, 15.0], 5.0),
             ]
-            env.step_sequence_mode4(seq4)
+            respuesta = env.step_sequence_mode4(seq4)
+            print("Respuesta secuencia modo 4:", respuesta[0][0])
 
         elif SELECT_MODE == 6:
             # Modo 6: [vx, vy, vr, vz]  (mundo). Con helper hold-z.

@@ -38,7 +38,7 @@ from env.environment.gymnasium_env import DroneEnv  # adapta si tu ruta difiere
 
 # ========= Configuración =========
 SCENE = "simple_street_canyon_with_cars"  # p.ej. "santiago.xml", "munich"
-DRONE_START = (0.0, 0.0, 10.0)
+DRONE_START = (-80.0, 0.0, 10.0)
 RX_POSITIONS = [
     #(-50.0, 0.0, 1.5),
     (20.0, -30.0, 1.5),
@@ -55,13 +55,13 @@ RX_POSITIONS = [
 MAX_STEPS = 100
 
 # Compara dos frecuencias (en MHz). Cambia a lo que necesites.
-FREQS_MHZ = [28000.0] #28000
+FREQS_MHZ = [3500.0] #28000
 FREQ_LABELS = [f"{f:.0f} MHz" for f in FREQS_MHZ]
 
 # Carpeta de salida con timestamp
 RUN_TAG = datetime.now().strftime("%Y%m%d-%H%M%S")
 #OUT_DIR = Path(project_root) / "outputs" / f"compare_metrics_{RUN_TAG}"
-OUT_DIR = Path(project_root) / "Pruebas Nan" / f"compare_metrics_{RUN_TAG}"
+OUT_DIR = Path(project_root) / "Pruebas movimiento dron gymnasium" / f"compare_metrics_{RUN_TAG}"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 OUT_DIR_RECEPTORS = OUT_DIR / "receptors-metrics"
@@ -209,7 +209,7 @@ def run_episode(freq_mhz: float) -> dict:
         ue_traj.append(_get_rx_positions_xyz(env.rt).copy())
         steps.append(t)
 
-        a = [1, 0, 0]
+        a = [5, 0, 0]
         b = [0, 0, 0]
 
         obs, rew, done, trunc, info = env.step(a, b)
