@@ -142,14 +142,23 @@ class DroneEnv(gym.Env):
         self.dron.step_delta(action)
         self.rt.move_tx(self.dron.pos)
 
-        # Movimiento de personas
-        #Movimiento de personas o receptores
+        # --- Movimiento de personas / receptores ---
         if actionR is None:
             actionR = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-            
-        rx_positions = self.receptores.step_all(actionR) #Se llama al metodo que se encarga de mover a los receptores
+
+        # Posiciones propuestas para todos los receptores
+        rx_positions = self.receptores.step_all(actionR)
+
         for rx, pos in zip(self.rt.rx_list, rx_positions):
-            rx.position = [float(pos[0]), float(pos[1]), float(pos[2])]
+            a = np.array(rx.position, dtype=np.float32)  # Posición actual
+            b = np.array(pos, dtype=np.float32)  # Nueva posición propuesta
+
+            if self.rt.is_move_valid_receptores(a, b):
+                # ✅ Movimiento permitido: actualizamos posición
+                rx.position = [float(b[0]), float(b[1]), float(b[2])]
+            else:
+                # 🚫 Movimiento bloqueado: mantenemos posición actual
+                print(f"[COLISIÓN BLOQUEADA] {a} -> {b}")
 
 
 

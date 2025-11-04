@@ -415,6 +415,14 @@ class SionnaRT:
 
         self.scene = scene
         self.scene.frequency = self.freq_hz
+
+        # 🔹 Aseguramos acceso al objeto Mitsuba (para ray_test y shapes)
+        if hasattr(self.scene, "mi_scene"):
+            self.mi_scene = self.scene.mi_scene
+        else:
+            # Algunas escenas (XML) ya son Mitsuba directamente
+            self.mi_scene = self.scene
+
         pmin, pmax = self.scene_bounds_xyz()
 
         # 🔹 Guardamos los límites de la escena para que DroneEnv pueda usarlos
@@ -459,7 +467,16 @@ class SionnaRT:
         # Sanity
         assert self.scene is not None and self._solver is not None and self.tx is not None, \
             "Sionna RT no quedó inicializado correctamente."
-    
+
+        try:
+            shapes = self.mi_scene.shapes()
+            print(f"[DEBUG] Se encontraron {len(shapes)} shapes en la escena Mitsuba.")
+            for i, s in enumerate(shapes):
+                bbox = s.bbox()
+                print(f"  Shape {i}: bbox min={bbox.min}, max={bbox.max}")
+        except Exception as e:
+            print("[ERROR] No se pudo listar shapes:", e)
+
     def _create_transmitters(self):
         """
         Crea SIEMPRE 1 TX y lo añade a la escena.
@@ -1148,3 +1165,83 @@ class SionnaRT:
         prx_dbm = Pt_dBm + K_dB - 10.0 * float(gamma) * np.log10(ratio)
         return np.asarray(prx_dbm, dtype=float).reshape(-1)
 
+    # ============================================================
+    # 🔹 Validación de movimiento sin colisión (receptores)
+    # ============================================================
+    @staticmethod
+    def _np3_receptores(p):
+        import numpy as np
+        a = np.asarray(p, dtype=np.float32).reshape(-1)
+        if a.size != 3:
+            raise ValueError("Se esperaban 3 componentes [x, y, z].")
+        return a
+
+    def is_move_valid_receptores(
+            self,
+            a, b,
+            radius: float = 0.30,
+            n_offsets: int = 12,
+            eps: float = 1e-3,
+            check_bounds: bool = True
+    ) -> bool:
+        import numpy as np
+        import mitsuba as mi
+        import drjit as dr
+
+        if self.scene is None:
+            raise RuntimeError("SionnaRT: scene no está construida. Llama build_scene() antes.")
+
+        # --- Normalizar puntos A y B ---
+        a = self._np3_receptores(a)
+        b = self._np3_receptores(b)
+        d = b - a
+        L = float(np.linalg.norm(d))
+        if L <= 1e-9:
+            return True  # No hay desplazamiento real
+
+        # --- Chequeo de límites ---
+        if check_bounds:
+            if getattr(self, "scene_bounds", None) is not None:
+                pmin, pmax = self.scene_bounds
+            else:
+                pmin, pmax = self.scene_bounds_xyz()
+            pmin = np.asarray(pmin, dtype=np.float32)
+            pmax = np.asarray(pmax, dtype=np.float32)
+            if np.any(b < (pmin - 1e-6)) or np.any(b > (pmax + 1e-6)):
+                return False
+
+        # --- Conversión a tipos Mitsuba ---
+        a_mi = mi.Point3f(float(a[0]), float(a[1]), float(a[2]))
+        b_mi = mi.Point3f(float(b[0]), float(b[1]), float(b[2]))
+        dirv = b_mi - a_mi
+        L_mi = dr.norm(dirv)
+        dirv = dirv / L_mi
+
+        # --- Base ortonormal perpendicular ---
+        up = mi.Vector3f(0.0, 0.0, 1.0)
+        n1 = dr.normalize(dr.cross(dirv, up))
+        n1 = dr.select(dr.norm(n1) < 1e-6,
+                       dr.normalize(dr.cross(dirv, mi.Vector3f(0, 1, 0))),
+                       n1)
+        n2 = dr.normalize(dr.cross(dirv, n1))
+
+        # --- Offsets circulares ---
+        offsets = [mi.Vector3f(0.0, 0.0, 0.0)]
+        if radius > 0.0 and n_offsets > 0:
+            for k in range(int(n_offsets)):
+                th = 2.0 * np.pi * (k / n_offsets)
+                offsets.append(radius * np.cos(th) * n1 + radius * np.sin(th) * n2)
+
+        mi_scene = getattr(self, "mi_scene", getattr(self.scene, "mi_scene", None))
+        if mi_scene is None:
+            raise RuntimeError("No hay escena Mitsuba activa (mi_scene=None)")
+
+        L_lim = float(L) - eps
+        for off in offsets:
+            o = a_mi + off + eps * dirv
+            ray = mi.Ray3f(o, dirv)
+            ray.maxt = L_lim
+            if mi_scene.ray_test(ray):
+                return False
+
+        return True
