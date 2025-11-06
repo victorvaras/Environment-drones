@@ -232,7 +232,7 @@ class SionnaRT:
                  tx_array_v_spacing: float = 0.5, # Separación vertical (en λ)
                  tx_array_h_spacing: float = 0.5, # Separación horizontal (en λ)
                  tx_array_pattern: str = "iso",   # "iso","dipole","tr38901", etc.
-                 tx_array_polarization: str = "V",# "V","H","VH" (dual)
+                 tx_array_polarization: str = "VH",# "V","H","VH" (dual)
 
                  # --- antenas RX (matriz global de la escena) ---
                  rx_array_rows: int = 1,
@@ -240,7 +240,7 @@ class SionnaRT:
                  rx_array_v_spacing: float = 0.5,
                  rx_array_h_spacing: float = 0.5,
                  rx_array_pattern: str = "iso",
-                 rx_array_polarization: str = "H",
+                 rx_array_polarization: str = "V",
 
                  # --- pose inicial del transmisor ---
                  tx_initial_position: tuple[float, float, float] = (0.0, 0.0, 10.0), # [m]
@@ -467,15 +467,6 @@ class SionnaRT:
         # Sanity
         assert self.scene is not None and self._solver is not None and self.tx is not None, \
             "Sionna RT no quedó inicializado correctamente."
-
-        try:
-            shapes = self.mi_scene.shapes()
-            print(f"[DEBUG] Se encontraron {len(shapes)} shapes en la escena Mitsuba.")
-            for i, s in enumerate(shapes):
-                bbox = s.bbox()
-                print(f"  Shape {i}: bbox min={bbox.min}, max={bbox.max}")
-        except Exception as e:
-            print("[ERROR] No se pudo listar shapes:", e)
 
     def _create_transmitters(self):
         """
