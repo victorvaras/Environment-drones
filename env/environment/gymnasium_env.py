@@ -150,7 +150,8 @@ class DroneEnv(gym.Env):
             # Fallback si tu contenedor expone otra API
             self.num_ut = int(getattr(self.receptores, "num", getattr(self.receptores, "n", 0)))
 
-       
+
+        self.rt.debug_dump_rt_config(header="=== POST build_scene ===")
 
         return obs, info
 
@@ -172,6 +173,13 @@ class DroneEnv(gym.Env):
                 ([action[0], action[1], 0, self._start[2]], 0.1),
                 ]
             posicion = self.dron_Realista.step_sequence_mode4(movimiento)
+            movimiento_normalizado = posicion[0][0]
+
+        elif (self.dron_Realista.cfg.mode == 7):
+            movimiento = [
+                ([80.0, 0.0, 0.0, 100.0], 0.1),
+                ]
+            posicion = self.dron_Realista.step_sequence_mode7(movimiento)
             movimiento_normalizado = posicion[0][0]
 
         movimiento_valido = self.rt.is_move_valid(self.rt.tx.position, movimiento_normalizado )
@@ -208,11 +216,12 @@ class DroneEnv(gym.Env):
         obs = np.concatenate([self.dron.pos]).astype(np.float32)
 
         # --- Terminación ---
+        #movimiento_valido = True
         if (movimiento_valido):
             terminated = False
         else:
             terminated = True
-            
+
         truncated = self.step_count >= self.max_steps
 
         info = {

@@ -20,6 +20,10 @@ import math
 from env.environment.drone_velocity_env import DroneVelocityEnv, DroneVelocityEnvConfig
 import time
 
+OUT_DIR = Path.cwd() / "Environment drones" / "salidas_pyflyt_2"
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
 def main():
     cfg = DroneVelocityEnvConfig(
         start_xyz=(0.0, 0.0, 10.0),
@@ -32,92 +36,63 @@ def main():
         seed=42,
         record_trajectory=True,
     )
+    SELECT_MODE = 6
 
     env = DroneVelocityEnv(cfg)
     try:
         print("Pose inicial:", env.get_pose())
 
-        # --- Mantener altura z≈1.0 m mientras se mueve en XY ---
-        # Usa el bloqueo de altura con PI simple (aquí sólo P: kp=1.2, ki=0.0).
-        z0 = 10
+        if SELECT_MODE == 6:
+            # --- Trayectoria circular mínima con un for ---
+            z0 = 15.0
+            env.step_mode6_holdz(vx=0.0, vy=0.0, vr=0.0, dt=2.0, z_ref=z0)  # estabiliza z
 
-        # estatico manteniendo z=z0
-        #env.step_xy_holdz(vx=0, vy=0.0, vr=0.0, dt=10.0, z_ref=z0, kp=1.2, ki=0.0)
+            R = 20.0          # radio [m]
+            speed = 5.0       # velocidad tangencial [m/s]
+            vueltas = 1.0     # nº de vueltas (puede ser fraccionario)
+            dt = 0.05         # duración de cada comando [s]
+            follow_heading = True   # True: yaw sigue la tangente; False: yaw fijo
+            clockwise = False       # True horario, False antihorario
 
-        # Recta en X 10 s manteniendo z=z0
-        #env.step_xy_holdz(vx=1.0, vy=0.0, vr=0.0, dt=10.0, z_ref=z0, kp=1.2, ki=0.0)
-        # Recta en Y 6 s manteniendo z=z0
-        #env.step_xy_holdz(vx=0.0, vy=1.0, vr=0.0, dt=10.0,  z_ref=z0, kp=1.2, ki=0.0)
-        # Giro en sitio 6 s manteniendo z=z0
-        #env.step_xy_holdz(vx=0.0, vy=0.0, vr=0.4, dt=6.0,  z_ref=z0, kp=1.2, ki=0.0)
-        # Hover 4 s (vx=vy=vr=0) manteniendo z=z0
-        #env.step_xy_holdz(vx=0.0, vy=0.0, vr=0.0, dt=10.0,  z_ref=z0, kp=1.2, ki=0.0)
+            # Derivados sencillos
+            omega = (speed / R) * (-1.0 if clockwise else 1.0)   # rad/s
+            steps = max(1, int((2.0 * math.pi * vueltas) / (abs(omega) * dt)))
+            ang = (2.0 * math.pi * vueltas) / steps              # incremento angular por paso
+
+            for i in range(steps):
+                theta = i * ang  # ángulo actual
+
+                # Velocidades en marco mundo para trayectoria circular
+                vx = -speed * math.sin(theta)
+                vy =  speed * math.cos(theta)
+                vr = omega if follow_heading else 0.0
+
+                env.step_mode6_holdz(vx=vx, vy=vy, vr=vr, dt=dt, z_ref=z0)
+
+            # Hover breve al terminar
+            env.step_mode6_holdz(vx=0.0, vy=0.0, vr=0.0, dt=2.0, z_ref=z0)
 
 
-        """
-        pulsos_xy_vr = [
-            (+1.0,  0.0,  0.0),  # +X
-            ( 0.0, +1.0,  0.0),  # +Y
-            (-1.0,  0.0,  0.0),  # -X
-            ( 0.0, -1.0,  0.0),  # -Y
-
-            (+0.8, +0.8,  0.0),  # diag +X+Y
-            (-0.8, +0.8,  0.0),  # diag -X+Y
-            (+0.8, -0.8,  0.0),  # diag +X-Y
-            (-0.8, -0.8,  0.0),  # diag -X-Y
-
-            ( 0.0,  0.0, +0.8),  # yaw CW
-            ( 0.0,  0.0, -0.8),  # yaw CCW
-
-            ( 0.0,  0.0,  0.0),  # hover breve
-        ]
-        """
-        pulsos_xy_vr = [
-            (0,  0.0,  0.0),
-            (5.0,  0.0,  0.0),  
-            #(0,  0.0,  0.0),
-            (0.0, 0.0,  0.0),
-            #(0.0, 0.0, 0.0),
-            #(0,0,0),
-            #(0,0,0),
-        ]
-
-        tiempo_inicio = time.perf_counter()
-        for vx, vy, vr in pulsos_xy_vr:
-            for i in range(30):
-                #env.step_xy_holdz(vx=vx, vy=vy, vr=vr, dt=0.2, z_ref=z0, kp=1.6, ki=0.1)
-                i= i+1
-
-        tiempo_total = time.perf_counter() - tiempo_inicio
-        print(f"Tiempo total de movimientos: {tiempo_total:.2f} s")
-
-        S4 = [
-            ([0,  0.0, 0.0, z0], 40.0),   # u +1 (adelante del dron) 2 s
-            ([ 5.0, 0.0, 0.0, z0], 40.0),   # v +1 (derecha del dron)   2 s
-            ([ 0.0,  0.0, 0.0, z0], 10.0),   # yaw rate +0.5 rad/s       2 s
-            ([ 0.0,  5.0, 0.0, z0], 10.0),   # hover a z0
-            ([ 0.0,  0.0, 0.0, z0], 10.0),   # hover a z0
-            ([ 0.0,  0.0, 0.0, z0], 10.0),   # hover a z0
-        ]
-        env.step_sequence_mode4(S4)  # mantiene modo 4 dentro y lo restaura al final
 
 
         # --- Pose final ---
         print("Pose final:", env.get_pose())
 
-        # --- Gráficas ---
-        # (1) Trayectoria 3D opcional
-        env.plot_trajectory(show=True, save_path=None)
+        fecha = time.strftime("%Y%m%d_%H%M%S")
+        NAME = f"{fecha}_modo_{SELECT_MODE}_demo"     # <- prefijo de archivos (cámbialo si quieres)
 
-        # (2) Vista superior X-Y (con flechas de orientación cada 12 muestras)
-        env.plot_topdown_xy(show=True, save_path=None, annotate_heading=True, stride=12)
+        files = env.save_all_plots(
+            out_dir=OUT_DIR,
+            name=NAME,
+            annotate_heading=True,
+            stride=12,
+            include_vz=True,
+            smooth_window=5,
+        )
 
-        # (3) Velocidades comandadas vs medidas
-        env.plot_velocities(compare_cmd=True, show=True, save_path=None)
-
-        # (4) Altura z(t) y opcionalmente v_z(t) (usa alias para tu llamada actual)
-        env.plot_altitude_profile(show=True, save_path=None)
-        env.plot_altitude_profile(show=True, overlay_vz=True, smooth_window=5, save_path=None)
+        print("Imágenes guardadas:")
+        for k, v in files.items():
+            print(f"  {k}: {v}")
 
     finally:
         print("Posición final (al cerrar):", env.get_pose())

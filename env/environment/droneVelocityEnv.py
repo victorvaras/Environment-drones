@@ -83,7 +83,9 @@ class DroneVelocityEnv:
 
     # --------------------------- construcción ---------------------------------
 
-    def __init__(self, cfg: DroneVelocityEnvConfig):
+    def __init__(self, cfg: DroneVelocityEnvConfig,
+                 step_durations: float = 0.1
+                 ):
         self.cfg = cfg
 
         # Validaciones básicas
@@ -114,6 +116,8 @@ class DroneVelocityEnv:
         self.yaw_history: List[float] = []
         self.cmd_history: List[np.ndarray] = []   # [vx, vy, vz, vr] o equivalente según modo
         self.meas_history: List[np.ndarray] = []  # [vx, vy, vz, vr] medidos (mundo)
+
+        self.step_durations = step_durations
 
         # Estado
         self.default_mode = int(self.cfg.mode)
@@ -440,6 +444,123 @@ class DroneVelocityEnv:
         plt.close(fig)
 
 
+    def _infer_step_params(self):
+        """
+        Devuelve (ctrls_per_step, dt_step).
+        - Si existe self.ctrls_per_step lo usa directamente.
+        - Si no, intenta inferir con self.rl_hz (si existe).
+        - Si no hay nada, asume 1 control por step (equivalente a step = índice).
+        """
+        dtc = float(self.dt_control)
+        control_hz = 1.0 / dtc
+
+        # Opción 1: atributo explícito
+        cps = getattr(self, "ctrls_per_step", None)
+        if isinstance(cps, (int, float)) and cps >= 1:
+            cps = int(round(cps))
+        else:
+            # Opción 2: inferir desde rl_hz si existe
+            rl_hz = getattr(self, "rl_hz", None)
+            if rl_hz is not None and rl_hz > 0:
+                cps = max(1, int(round(control_hz / float(rl_hz))))
+            else:
+                cps = 1
+
+        dt_step = cps * dtc
+        return cps, dt_step
+
+
+    def plot_xyz_dual_x(self, show: bool = True, save_path: str | None = None, separate: bool = True):
+        """
+        Dibuja X, Y, Z con doble eje X:
+        - Abajo: Tiempo [s]
+        - Arriba: Step [#] (calculado con ctrls_per_step para evitar 'step' inflado)
+        Por defecto genera 3 PNG separados (uno por coordenada) cuando 'separate=True'.
+        Si 'separate=False', genera una sola figura con 3 filas.
+
+        Para corregir el step, define UNO de estos atributos antes de plotear:
+        - self.ctrls_per_step         (entero)
+        - self.rl_hz                  (Hz de RL); infiere ctrls_per_step = round(control_hz / rl_hz)
+        """
+        if not self.positions_history:
+            print("[plot_xyz_dual_x] No hay datos para graficar.")
+            return
+
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from matplotlib.ticker import MaxNLocator, FuncFormatter
+
+        P = np.vstack(self.positions_history)  # (N, 3)
+        
+        N = P.shape[0]
+
+        dtc = float(self.dt_control)
+        t = np.arange(N, dtype=float) * dtc
+
+        # Relación controles↔step y funciones de mapeo para el eje secundario
+        ctrls_per_step, dt_step = self._infer_step_params()
+
+        # Mapeos (continuos) entre tiempo y step (aprox lineal, suficiente para ticks correctos)
+        def time_to_step(x):
+            return x / dt_step
+
+        def step_to_time(s):
+            return s * dt_step
+
+        coord_labels = ["X [m]", "Y [m]", "Z [m]"]
+        coord_keys = ["x", "y", "z"]
+
+        if separate:
+            files = {}
+            for i, key in enumerate(coord_keys):
+                fig, ax = plt.subplots(figsize=(10, 4))
+                ax.plot(t, P[:, i], linewidth=1.8)
+                ax.set_xlabel("Tiempo [s]")
+                ax.set_ylabel(coord_labels[i])
+                ax.grid(True, alpha=0.6)
+
+                # Eje X secundario arriba con unidades de Step
+                secax = ax.secondary_xaxis('top', functions=(time_to_step, step_to_time))
+                secax.set_xlabel("Step [#]")
+                secax.xaxis.set_major_locator(MaxNLocator(integer=True))
+                secax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(round(v))}"))
+
+                ax.set_title(f"{coord_labels[i].split()[0]} vs Tiempo (eje superior: Step)")
+
+                if save_path:
+                    path_i = save_path.replace(".png", f"_{key}.png")
+                    fig.savefig(path_i, dpi=150, bbox_inches="tight")
+                    files[key] = path_i
+                if show:
+                    plt.show()
+                plt.close(fig)
+            return files if save_path else None
+
+        else:
+            fig, axes = plt.subplots(nrows=3, ncols=1, figsize=(10, 9), sharex=True)
+            for i, ax in enumerate(axes):
+                ax.plot(t, P[:, i], linewidth=1.8)
+                if i == 2:
+                    ax.set_xlabel("Tiempo [s]")
+                ax.set_ylabel(coord_labels[i])
+                ax.grid(True, alpha=0.6)
+
+                secax = ax.secondary_xaxis('top', functions=(time_to_step, step_to_time))
+                if i == 0:
+                    secax.set_xlabel("Step [#]")
+                secax.xaxis.set_major_locator(MaxNLocator(integer=True))
+                secax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(round(v))}"))
+
+            axes[0].set_title("Posición con doble eje X (Tiempo abajo, Step arriba)")
+            fig.tight_layout()
+
+            if save_path:
+                fig.savefig(save_path, dpi=150, bbox_inches="tight")
+            if show:
+                plt.show()
+            plt.close(fig)
+
+
 
 
     def save_all_plots(
@@ -460,15 +581,190 @@ class DroneVelocityEnv:
         out_path.mkdir(parents=True, exist_ok=True)
 
         files = {}
-        files["traj3d"] = str(out_path / f"{name}_traj3d.png")
-        files["xy"]     = str(out_path / f"{name}_xy.png")
-        files["vel"]    = str(out_path / f"{name}_vel.png")
-        files["alt"]    = str(out_path / f"{name}_alt.png")
+        files["traj3d"] = str(out_path / f"Trayectoria 3D.png")
+        files["xy"]     = str(out_path / f"Trayectoria XY.png")
+        files["vel"]    = str(out_path / f"Velocidades.png")
+        files["alt"]    = str(out_path / f"Altura-VZ.png")
 
         self.plot_trajectory_3d(show=False, save_path=files["traj3d"])
         self.plot_xy(show=False, save_path=files["xy"], annotate_heading=annotate_heading, stride=stride)
         self.plot_velocities(compare_cmd=True, show=False, save_path=files["vel"], title=None)
         self.plot_altitude(show=False, save_path=files["alt"], overlay_vz=include_vz, smooth_window=smooth_window)
 
+        files["xyz_dualx_steps"] = str(out_path / f"{name}_xyz_dualx_steps.png")  # base
+        self.plot_xyz_dual_x_from_step_durations(
+            show=False,
+            save_path=files["xyz_dualx_steps"],
+            separate=False  # genera _x, _y, _z
+        )
+
         return files
+    
+
+
+    def _build_step_time_maps_from_durations(self, N: int):
+        """
+        Construye mapeos entre Tiempo<->Step usando self.step_durations, sin interpretar nada más.
+        Devuelve: (time_to_step, step_to_time, edges, n_steps)
+
+        - edges: tiempos acumulados de inicio de cada step, con edges[0]=0 y edges[-1]=T_total.
+        - time_to_step(t): mapea t -> índice de step CONTINUO (k + fracción en [0,1)).
+        - step_to_time(s): mapea s -> tiempo continuo (interpolación lineal dentro de cada step).
+        """
+        import numpy as np
+
+        if not hasattr(self, "step_durations"):
+            raise ValueError("[_build_step_time_maps_from_durations] Falta self.step_durations.")
+
+        sd = self.step_durations
+        dtc = float(self.dt_control)
+        T_end = (N - 1) * dtc  # tiempo del último sample
+
+        # Normaliza a vector de duraciones
+        if np.isscalar(sd):
+            d = float(sd)
+            if d <= 0:
+                raise ValueError("step_durations (escala) debe ser > 0.")
+            # Número de steps necesarios para cubrir el horizonte de tiempos
+            n_steps = max(1, int(np.ceil((N * dtc) / d)))
+            durations = np.full(n_steps, d, dtype=float)
+        else:
+            durations = np.asarray(sd, dtype=float).ravel()
+            if durations.size == 0:
+                raise ValueError("step_durations (vector) no puede estar vacío.")
+            if np.any(durations <= 0):
+                raise ValueError("Todos los step_durations deben ser > 0.")
+            n_steps = durations.size
+
+        # Bordes acumulados de cada step: [0, d0, d0+d1, ...]
+        edges = np.concatenate([[0.0], np.cumsum(durations)])
+        # Asegura cubrir al menos hasta T_end
+        if edges[-1] < T_end:
+            # Si el vector no alcanza, amplía repetendo el último duration para cubrir t (no interpretamos contenido;
+            # solo extendemos linealmente para poder mostrar eje; si prefieres, puedes lanzar error aquí).
+            extra_needed = T_end - edges[-1]
+            n_extra = int(np.ceil(extra_needed / durations[-1]))
+            durations = np.concatenate([durations, np.full(n_extra, durations[-1], float)])
+            n_steps = durations.size
+            edges = np.concatenate([[0.0], np.cumsum(durations)])
+
+        def time_to_step(x):
+            x = np.asarray(x, dtype=float)
+            idx = np.searchsorted(edges, x, side="right") - 1
+            idx = np.clip(idx, 0, n_steps - 1)
+            frac = (x - edges[idx]) / durations[idx]
+            return idx + frac
+
+        def step_to_time(s):
+            s = np.asarray(s, dtype=float)
+            k = np.floor(s).astype(int)
+            k = np.clip(k, 0, n_steps - 1)
+            frac = s - k
+            return edges[k] + frac * durations[k]
+
+        return time_to_step, step_to_time, edges, n_steps
+
+
+    def compute_step_index_from_durations(self):
+        """
+        Devuelve un vector entero step_idx (longitud N) con el número de step de cada muestra de control,
+        usando EXCLUSIVAMENTE self.step_durations.
+        """
+        import numpy as np
+        if not getattr(self, "positions_history", None):
+            raise ValueError("[compute_step_index_from_durations] No hay posiciones para obtener N.")
+        N = len(self.positions_history)
+        dtc = float(self.dt_control)
+        t = np.arange(N, dtype=float) * dtc
+
+        time_to_step, _, _, _ = self._build_step_time_maps_from_durations(N)
+        step_cont = time_to_step(t)
+        # Índice entero por muestra (k de cada tramo)
+        step_idx = np.floor(step_cont + 1e-12).astype(int)
+        return step_idx
+
+
+    def plot_xyz_dual_x_from_step_durations(self, show: bool = True, save_path: str | None = None, separate: bool = True):
+        """
+        Plotea X, Y, Z con doble eje X:
+        - Abajo: Tiempo [s] (muestras a dt_control)
+        - Arriba: Step [#] (calculado EXACTAMENTE desde self.step_durations)
+
+        separate=True  -> 3 PNG (uno por coordenada) si save_path termina en ".png" (añade _x/_y/_z)
+        separate=False -> una sola figura con 3 filas
+        """
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from matplotlib.ticker import MaxNLocator, FuncFormatter
+
+        if not getattr(self, "positions_history", None):
+            print("[plot_xyz_dual_x_from_step_durations] No hay datos para graficar.")
+            return
+
+        P = np.vstack(self.positions_history)  # (N,3)
+        N = P.shape[0]
+        dtc = float(self.dt_control)
+        t = np.arange(N, dtype=float) * dtc
+
+        # Mapeos basados 100% en self.step_durations
+        time_to_step, step_to_time, edges, n_steps = self._build_step_time_maps_from_durations(N)
+
+        # Formateador entero para el eje superior (Step)
+        int_formatter = FuncFormatter(lambda v, _: f"{int(round(v))}")
+
+        coord_labels = ["X [m]", "Y [m]", "Z [m]"]
+        keys = ["x", "y", "z"]
+
+        if separate:
+            files = {}
+            for i, k in enumerate(keys):
+                fig, ax = plt.subplots(figsize=(10, 4))
+                ax.plot(t, P[:, i], linewidth=1.8)
+                ax.set_xlabel("Tiempo [s]")
+                ax.set_ylabel(coord_labels[i])
+                ax.grid(True, alpha=0.6)
+
+                secax = ax.secondary_xaxis('top', functions=(time_to_step, step_to_time))
+                secax.set_xlabel("Step [#]")
+                secax.xaxis.set_major_locator(MaxNLocator(integer=True))
+                secax.xaxis.set_major_formatter(int_formatter)
+                # Opcional: limitar a [0, n_steps]
+                secax.set_xlim(time_to_step(ax.get_xlim()))
+
+                ax.set_title(f"{coord_labels[i].split()[0]} vs Tiempo (eje superior: Step)")
+
+                if save_path:
+                    path_i = save_path.replace(".png", f"_{k}.png")
+                    fig.savefig(path_i, dpi=150, bbox_inches="tight")
+                    files[k] = path_i
+                if show:
+                    plt.show()
+                plt.close(fig)
+            return files if save_path else None
+
+        else:
+            fig, axes = plt.subplots(nrows=3, ncols=1, figsize=(10, 9), sharex=True)
+            for i, ax in enumerate(axes):
+                ax.plot(t, P[:, i], linewidth=1.8)
+                if i == 2:
+                    ax.set_xlabel("Tiempo [s]")
+                ax.set_ylabel(coord_labels[i])
+                ax.grid(True, alpha=0.6)
+
+                secax = ax.secondary_xaxis('top', functions=(time_to_step, step_to_time))
+                if i == 0:
+                    secax.set_xlabel("Step [#]")
+                secax.xaxis.set_major_locator(MaxNLocator(integer=True))
+                secax.xaxis.set_major_formatter(int_formatter)
+                secax.set_xlim(time_to_step(ax.get_xlim()))
+
+            axes[0].set_title("Posición con doble eje X (Tiempo abajo, Step arriba)")
+            fig.tight_layout()
+
+            if save_path:
+                fig.savefig(save_path, dpi=150, bbox_inches="tight")
+            if show:
+                plt.show()
+            plt.close(fig)
+
 

@@ -37,23 +37,22 @@ from env.environment.gymnasium_env import DroneEnv  # adapta si tu ruta difiere
 
 
 # ========= Configuración =========
-SCENE = "simple_street_canyon_with_cars"  # p.ej. "santiago.xml", "munich"
-DRONE_START = (-80.0, -30.0, 10.0)
+SCENE = "simple_street_canyon"  # p.ej. "santiago.xml", "munich" "simple_street_canyon"
+DRONE_START = (-85.0, 0.0, 10.0)
 RX_POSITIONS = [
     #(-50.0, 0.0, 1.5),
+    (-80.0,    -55.0, 1.5),    
     (20.0, -30.0, 1.5),
-    #(20.0, 0.0, 1.5),
+    (50.0, 0.0, 1.5),
     #(-20.0, 0.0, 1.5),
-    #(0, 0, 1.5),
     #(-1.0, 0.0, 1.5),
     #(0.0,   30.0, 1.5),
-    #(20.0,  -30.0, 1.5),
+    #(0.0,  -30.0, 1.5),
     #(80.0,   40.0, 1.5),
-    (50.0,    0.0, 1.5),
-    (-90, -55, 1.5),
+    
 
 ]
-MAX_STEPS = 100
+MAX_STEPS = 400
 
 # Compara dos frecuencias (en MHz). Cambia a lo que necesites.
 FREQS_MHZ = [3500.0] #28000
@@ -65,20 +64,23 @@ RUN_TAG = datetime.now().strftime("%Y%m%d-%H%M%S")
 OUT_DIR = Path(project_root) / "Pruebas movimiento dron gymnasium" / f"compare_metrics_{RUN_TAG}"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OUT_DIR_RECEPTORS = OUT_DIR / "receptors-metrics"
+OUT_DIR_RECEPTORS = OUT_DIR / "4- receptors-metrics"
 OUT_DIR_RECEPTORS.mkdir(parents=True, exist_ok=True)
 
-OUT_DIR_UE_METRICS = OUT_DIR / "metricas-por-usuario"
+OUT_DIR_UE_METRICS = OUT_DIR / "6- metricas-por-usuario"
 OUT_DIR_UE_METRICS.mkdir(parents=True, exist_ok=True)
 
-OUT_DIR_UE_all_METRICS = OUT_DIR / "metricas-totales-por-usuario-y-frecuencia"
+OUT_DIR_UE_all_METRICS = OUT_DIR / "3- metricas-totales-por-usuario-y-frecuencia"
 OUT_DIR_UE_all_METRICS.mkdir(parents=True, exist_ok=True)
 
-OUT_DIR_FREQ_METRICS = OUT_DIR / "metricas-totales-por-frecuencia"
+OUT_DIR_FREQ_METRICS = OUT_DIR / "2- metricas-totales-por-frecuencia"
 OUT_DIR_FREQ_METRICS.mkdir(parents=True, exist_ok=True)
 
-OUT_DIR_DOPPLER = OUT_DIR / "doppler-metrics"
+OUT_DIR_DOPPLER = OUT_DIR / "5- doppler-metrics"
 OUT_DIR_DOPPLER.mkdir(parents=True, exist_ok=True)
+
+OUT_DIR_MOV_DRONE = OUT_DIR / "1- trayectoria-dron"
+OUT_DIR_MOV_DRONE.mkdir(parents=True, exist_ok=True)
 
 
 def _scalar_float(x):
@@ -1438,7 +1440,7 @@ def run_episode(freq_mhz: float) -> dict:
 
         
         vy = float(np.random.uniform(-5.0, 5.0))
-        a = [-5.0, vy, 0.0]
+        a = [5.0, 0.0, 10.0]
         b = [0, 0, 0]
 
         obs, rew, done, trunc, info = env.step(a, b)
@@ -1459,10 +1461,8 @@ def run_episode(freq_mhz: float) -> dict:
     NAME = f"movimiento_dron_FyPlyt_"     # <- prefijo de archivos (cámbialo si quieres)
 
     env.dron_Realista.save_all_plots(
-        out_dir=OUT_DIR,
-        name=NAME,
+        out_dir=OUT_DIR_MOV_DRONE,
         annotate_heading=True,
-        stride=12,
         include_vz=True,
         smooth_window=5,
     )
@@ -1479,6 +1479,50 @@ def run_episode(freq_mhz: float) -> dict:
             "steps": np.array(steps, dtype=int),
         },
     }
+
+
+def save_movement_summary_txt(
+    filename: str | None = None,
+    movement_mode: str | None = None,
+    movement_type: str | None = None,
+    velocities_used: list | None = None,
+    extra_fields: dict | None = None,
+    base_dir: Path | None = None,
+) -> Path:
+
+
+    base_dir = base_dir or OUT_DIR
+    filename = filename or f"movimiento_{RUN_TAG}.txt"
+    out_path = base_dir / filename
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    freqs_str = ", ".join(f"{f:.0f} MHz" for f in (FREQS_MHZ or []))
+    rx_count = len(RX_POSITIONS) if RX_POSITIONS else 0
+
+    lines = []
+    lines.append("===== RESUMEN DE MOVIMIENTO =====")
+    lines.append(f"Generado: {now}")
+    lines.append(f"Archivo: {out_path.name}")
+    lines.append("")
+    lines.append("=== Configuración global ===")
+    lines.append(f"Escena: {SCENE}")
+    lines.append(f"Frecuencias usadas: {freqs_str or 'N/D'}")
+    lines.append(f"Posición inicial del dron [x,y,z] (m): {tuple(DRONE_START)}")
+    lines.append(f"Receptores (UEs) definidos: {rx_count}")
+    lines.append(f"Max steps: {MAX_STEPS}")
+    lines.append("")
+    lines.append("=== Movimiento ===")
+    lines.append(f"Modo de movimiento: {movement_mode or 'Rellenar a mano'}")
+    lines.append(f"Tipo de movimiento: {movement_type or 'Rellenar a mano'}")
+
+    lines.append("Velocidades usadas:")
+    lines.append("Velocidad por defecto, maxima por eje 10m/s")
+    lines.append("Velocidad por defecto, minima por eje -10m/s")
+
+
+    out_path.write_text("\n".join(lines), encoding="utf-8")
+    return out_path
 
 
 
@@ -1538,6 +1582,10 @@ def main():
         plot_fd_all_ues_onefig(df_all, f, OUT_DIR_DOPPLER)
         plot_nu_tc_all_ues_onefig(df_all, f, OUT_DIR_DOPPLER)
         plot_slope_all_ues_onefig(df_all, f, OUT_DIR_DOPPLER)
+
+
+    save_movement_summary_txt(movement_mode= "Mode ",
+                              movement_type= "Velocidad fija de [vx: 5.0, vy: 0.0, vz: 10 metros] m/s",)
 
 
     print(f"[DONE] Imágenes en: {OUT_DIR}")

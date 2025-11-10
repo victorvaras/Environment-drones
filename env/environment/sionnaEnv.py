@@ -231,8 +231,8 @@ class SionnaRT:
                  tx_array_cols: int = 1,          # Nº de columnas de la matriz TX
                  tx_array_v_spacing: float = 0.5, # Separación vertical (en λ)
                  tx_array_h_spacing: float = 0.5, # Separación horizontal (en λ)
-                 tx_array_pattern: str = "iso",   # "iso","dipole","tr38901", etc.
-                 tx_array_polarization: str = "V",# "V","H","VH" (dual)
+                 tx_array_pattern: str = "tr38901",   # "iso","dipole","tr38901", etc.
+                 tx_array_polarization: str = "VH",# "V","H","VH" (dual)
 
                  # --- antenas RX (matriz global de la escena) ---
                  rx_array_rows: int = 1,
@@ -240,7 +240,7 @@ class SionnaRT:
                  rx_array_v_spacing: float = 0.5,
                  rx_array_h_spacing: float = 0.5,
                  rx_array_pattern: str = "iso",
-                 rx_array_polarization: str = "H",
+                 rx_array_polarization: str = "V",
 
                  # --- pose inicial del transmisor ---
                  tx_initial_position: tuple[float, float, float] = (0.0, 0.0, 10.0), # [m]
@@ -442,7 +442,8 @@ class SionnaRT:
             num_cols=self.rx_array_cols,
             vertical_spacing=self.rx_array_v_spacing,
             horizontal_spacing=self.rx_array_h_spacing,
-            pattern=self.rx_array_pattern, polarization=self.rx_array_polarization
+            pattern= self.rx_array_pattern, 
+            polarization= self.rx_array_polarization
         )
 
         # Precoder/combiner off si existen
@@ -454,7 +455,7 @@ class SionnaRT:
         self._solver = PathSolver()
 
         # Transmisores según modo
-        self._create_transmitters()
+        self._create_transmitters()        
 
         # Sanity
         assert self.scene is not None and self._solver is not None and self.tx is not None, \
@@ -496,6 +497,12 @@ class SionnaRT:
         tx.velocity = self.tx_velocities
         #tx.velocity = [0,0,0]
 
+        try:
+            tx.array = self._tx_array
+            i=1
+        except Exception:
+            pass
+
         # Añade a escena y guarda referencias
         self.scene.add(tx)
         self.txs.append(tx)
@@ -514,6 +521,14 @@ class SionnaRT:
                           display_radius=1.5, color=(0, 0, 0),
                           velocity = [0, 0, 0]
                           )
+            
+            # 🔴 ASOCIAR ARRAY **POR NODO**
+            try:
+                rx.array = self._rx_array
+                i=1
+            except Exception:
+                pass
+
             self.scene.add(rx)
             self.rx_list.append(rx)
 
@@ -539,7 +554,7 @@ class SionnaRT:
         bb = mi_scene.bbox()                      # mi.BoundingBox3f  (min, max)
 
         pmin = np.array([float(bb.min.x), float(bb.min.y), float(bb.min.z)], dtype=float)
-        pmax = np.array([float(bb.max.x), float(bb.max.y), float(bb.max.z)], dtype=float)
+        pmax = np.array([float(bb.max.x), float(bb.max.y), float(bb.max.z*2)], dtype=float)
         return pmin, pmax
 
     # ---- Cálculo de paths y métricas ----
@@ -1230,4 +1245,115 @@ class SionnaRT:
 
         # Ningún rayo intersectó
         return True
+    
+    # === Helpers y dumps de depuración (PEGAR DENTRO DE LA CLASE SionnaRT) ===
 
+    def _safe_get(self, obj, name, default=None):
+        return getattr(obj, name, default) if obj is not None else default
+
+    def _pattern_name(self, arr):
+        p = self._safe_get(arr, "pattern", None)
+        return str(p) if p is not None else "N/A"
+
+    def _pol_name(self, arr):
+        p = self._safe_get(arr, "polarization", None)
+        return str(p) if p is not None else "N/A"
+
+    def _array_shape(self, arr):
+        if arr is None:
+            return "N/A"
+        nr = self._safe_get(arr, "num_rows", "N/A")
+        nc = self._safe_get(arr, "num_cols", "N/A")
+        dv = self._safe_get(arr, "vertical_spacing", "N/A")
+        dh = self._safe_get(arr, "horizontal_spacing", "N/A")
+        return f"{nr}x{nc} (dv={dv} λ, dh={dh} λ)"
+
+    def _f_lambda(self, freq_hz):
+        c = 299792458.0
+        return c / float(freq_hz)
+
+    def _ypr_str(self, ypr):
+        try:
+            y, p, r = [float(v) for v in ypr]
+            return f"yaw={y:.2f}°, pitch={p:.2f}°, roll={r:.2f}°"
+        except Exception:
+            return str(ypr)
+
+    def debug_dump_rt_config(self, *, header="=== SionnaRT DEBUG DUMP ==="):
+        print("\n" + str(header))
+        print(f"Scene: {self.scene_name}")
+        print(f"Frequency: {self.freq_hz/1e9:.6f} GHz | λ = {self._f_lambda(self.freq_hz):.4e} m")
+        print(f"Antenna mode: {self.antenna_mode}")
+
+        # Arrays globales
+        print("--- Arrays (scene-global) ---")
+        print(f" TX.array: pattern={self._pattern_name(self.scene.tx_array)}, "
+            f"pol={self._pol_name(self.scene.tx_array)}, "
+            f"shape={self._array_shape(self.scene.tx_array)}")
+        print(f" RX.array: pattern={self._pattern_name(self.scene.rx_array)}, "
+            f"pol={self._pol_name(self.scene.rx_array)}, "
+            f"shape={self._array_shape(self.scene.rx_array)}")
+
+        # Solver
+        print("--- Solver flags ---")
+        print(f" max_depth={self.max_depth}, los={self.los}, specular={self.specular_reflection}, diffuse={self.diffuse_reflection},")
+        print(f" refraction={self.refraction}, diffraction={self.diffraction} "
+            f"(edge={self.edge_diffraction}, lit_region={self.diffraction_lit_region})")
+        print(f" synthetic_array={self.synthetic_array}, samples_per_src={self.samples_per_src}, "
+            f"max_num_paths_per_src={self.max_num_paths_per_src}, seed={self.seed}")
+
+        # TXs
+        print("--- TXs ---")
+        try:
+            total_tx_dbm = self._total_tx_power_dbm()
+        except Exception:
+            total_tx_dbm = float(self.tx_power_dbm_total)
+        print(f" total_configured_tx_power={float(self.tx_power_dbm_total):.2f} dBm  (sum_real={total_tx_dbm:.2f} dBm)")
+
+        if not self.txs:
+            print(" [!] No hay TX instanciados.")
+        for k, tx in enumerate(self.txs):
+            pos = self._safe_get(tx, "position", None)
+            ori = self._safe_get(tx, "orientation", None)
+            pwr = self._safe_get(tx, "power_dbm", None)
+            vel = self._safe_get(tx, "velocity", None)
+            try:
+                pwr_f = float(pwr) if pwr is not None else "N/A"
+            except Exception:
+                pwr_f = "N/A"
+            print(f"  TX[{k}]: name={getattr(tx,'name','?')}, "
+                f"pos={list(pos) if pos is not None else 'N/A'}, "
+                f"ori={self._ypr_str(ori)}, power_dbm={pwr_f}, vel={vel}")
+
+        # RXs
+        print("--- RX list ---")
+        if not self.rx_list:
+            print("  (vacío)")
+        for k, rx in enumerate(self.rx_list):
+            pos = self._safe_get(rx, "position", None)
+            vel = self._safe_get(rx, "velocity", None)
+            print(f"  RX[{k}]: name={getattr(rx,'name','?')}, pos={list(pos) if pos is not None else 'N/A'}, vel={vel}")
+
+        # Sanity checks
+        print("--- Sanity checks ---")
+        tx_pat = self._pattern_name(self.scene.tx_array).lower()
+        if self.antenna_mode.upper().startswith("SECTOR") and ("iso" in tx_pat or "isotropic" in tx_pat or "dipole" in tx_pat):
+            print(" [WARN] antenna_mode=SECTOR*, pero TX.pattern es isotrópico/dipolo. "
+                "¿Querías 'tr38901' (3GPP 3D)?")
+        rx_pat = self._pattern_name(self.scene.rx_array).lower()
+        if rx_pat == "dipole" and str(self.rx_array_pattern).lower() != "dipole":
+            print(f" [WARN] RX.pattern efectivo = dipole, pero pediste '{self.rx_array_pattern}'. Revisa build_scene().")
+        rx_pol = self._pol_name(self.scene.rx_array)
+        if rx_pol.upper() != str(self.rx_array_polarization).upper():
+            print(f" [WARN] RX.polarization efectivo = {rx_pol}, pero pediste '{self.rx_array_polarization}'.")
+
+        if self.txs:
+            try:
+                y, p, r = [float(v) for v in self.txs[0].orientation]
+                if abs(p) >= 80.0:
+                    print(f" [NOTE] pitch={p:.1f}° (casi vertical). Con panel 3GPP, "
+                        f"prueba downtilt típico de ~ -6° a -12°.")
+            except Exception:
+                pass
+
+        print("=== END DEBUG DUMP ===\n")
