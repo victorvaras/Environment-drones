@@ -24,12 +24,12 @@ from env.environment.droneVelocityEnv import DroneVelocityEnv, DroneVelocityEnvC
 # Si corres este script directamente desde /mnt/data, puedes hacer:
 # from drone_velocity_env import DroneVelocityEnv, DroneVelocityEnvConfig
 
-OUT_DIR = Path.cwd() / "Environment drones" / "salidas_pyflyt-2" / "6- Prueba modo 7, avanzar en X, luego Y, luego diagonal -X-Y"
+OUT_DIR = Path.cwd() / "Environment drones" / "salidas_pyflyt-3" 
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def main():
-    SELECT_MODE = 7 # cambia a 4 o 7 para probar otros
+    SELECT_MODE = 6 # cambia a 4 o 7 para probar otros
 
     cfg = DroneVelocityEnvConfig(
         start_xyz=( 0.0, 0.0, 15.0),
@@ -48,29 +48,65 @@ def main():
 
         #SELECT_MODE = 64
 
-        if SELECT_MODE == 4:
+        if SELECT_MODE == 0:
+            mov = [0.0, 0.30, 0.0, 1.0]
+            dt = 0.1
+            for _ in range(100):
+                env.step_move(mov, dt)
+
+        elif SELECT_MODE == 1:
+            mov = [0.10, 0.0, 0.0, 20.0]
+            dt = 0.1
+            for _ in range(100):
+                env.step_move(mov, dt)
+
+        elif SELECT_MODE == 2:
+            mov = [0.010, 0.0, 0.0, 15.0]
+            dt = 0.1
+            for _ in range(100):
+                env.step_move(mov, dt)
+
+        elif SELECT_MODE == 3:
+            mov = [0.0, 0.10, 0.0, 15.0]
+            dt = 0.1
+            for _ in range(100):
+                env.step_move(mov, dt)       
+
+
+        elif SELECT_MODE == 4:
             # Modo 4: [u, v, vr, z]  (u,v en cuerpo; z absoluto en mundo)
             seq4 = [
                 ([0.0, 0.0, 0.0, 15.0], 5.0),     # hover en z=5
-                #([5.0, 0.0, 0.0, 15.0], 5.0),     # avanzar en u
-                #([0.0, 5.0, 0.0, 15.0], 5.0),     # derecha y subir a z=6.5
-                #([0.0, 0.0, 0.0, 15.0], 5.0),     # girar en sitio
-                #([-5.0, -5.0, 0.0, 15.0], 5.0),     # bajar a z=5
-                #([0.0, 0.0, 0.0, 15.0], 5.0),
+                ([5.0, 0.0, 0.0, 15.0], 5.0),     # avanzar en u
+                ([0.0, 0.0, 0.0, 15.0], 50.0),     # derecha y subir a z=6.5
+                ([0.0, 0.0, 5.0, 15.0], 5.0),     # girar en sitio
+                ([0.0, 0.0, 0.0, 15.0], 50.0),     # bajar a z=5
+                ([5.0, 0.0, 0.0, 15.0], 5.0),
             ]
-            respuesta = env.step_sequence_mode4(seq4)
-            print("Respuesta secuencia modo 4:", respuesta[0][0])
+            # env.step_sequence_mode4(seq4)
+
+            mov = [5.0, 0.0, 0.0, 15.0]
+            dt = 0.1
+            for _ in range(100):
+                env.step_move(mov, dt) 
+
+
+        elif SELECT_MODE == 5:
+            mov = [0.0, 1.0, 0.0, 10.0]
+            dt = 0.1
+            for _ in range(100):
+                env.step_move(mov, dt)       
+
 
         elif SELECT_MODE == 6:
-            # Modo 6: [vx, vy, vr, vz]  (mundo). Con helper hold-z.
-            z0 = 15.0
-            env.step_mode6_holdz(vx=0.0, vy=0.0, vr=0.0, dt=5.0, z_ref=z0)   # estabiliza z
-            env.step_mode6_holdz(vx=5.0, vy=0.0, vr=0.0, dt=5.0, z_ref=z0)   # recta en X
-            env.step_mode6_holdz(vx=0.0, vy=5.0, vr=0.0, dt=5.0, z_ref=z0)  # recta Y + subir rápido
-            env.step_mode6_holdz(vx=0.0, vy=0.0, vr=0.0, dt=5.0, z_ref=z0)  # giro en sitio
-            env.step_mode6_holdz(vx=-5.0, vy=-5.0, vr=0.0, dt=5.0, z_ref=z0) # diagonal -X-Y + bajar rápido
-            env.step_mode6_holdz(vx=0.0, vy=0.0, vr=0.0, dt=5.0, z_ref=z0)
+            mov = [5.0, 5.0, 0.0, 10.0]
+            dt = 0.1
+            for _ in range(100):
+                env.step_move(mov, dt)       
 
+
+        
+        
         elif SELECT_MODE == 7:
             # Modo 7: [x, y, r, z] (setpoint de posición absoluta en mundo)
             seq7 = [
@@ -80,8 +116,12 @@ def main():
                 ([25.0, 25.0, 0.0, 15.0], 10.0),
                 ([0.0, 0.0, 0.0, 15.0], 10.0), 
             ]
-            env.step_sequence_mode7(seq7)
+            #env.step_sequence_mode7(seq7)
 
+
+            mov = [20.0, 10.0, 0.0, 15.0] 
+            dt = 30.0
+            env.step_mode7(mov, dt)
 
         elif SELECT_MODE == 61:
             # --- Trayectoria circular mínima con un for ---

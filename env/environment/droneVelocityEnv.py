@@ -88,11 +88,6 @@ class DroneVelocityEnv:
                  ):
         self.cfg = cfg
 
-        # Validaciones básicas
-        if self.cfg.mode not in (4, 6, 7):
-            raise ValueError("cfg.mode debe ser 4, 6 o 7.")
-        if self.cfg.physics_hz % self.cfg.control_hz != 0:
-            raise ValueError("control_hz debe dividir a physics_hz (p.ej., 120 | 240).")
 
         # Construcción del Aviary
         start_pos = np.array([self.cfg.start_xyz], dtype=float)  # (1,3)
@@ -212,6 +207,14 @@ class DroneVelocityEnv:
             yaw_prev = yaw
 
         return pos, rpy
+
+    # Aplicacion de movimiento, para cualquier modo (interno)
+    def step_move(self, move: Iterable[float], dt: float):
+        
+        sp = np.asarray(move, dtype=float).reshape(4,)
+
+        pos, rpy = self._run_for(dt, sp, log_as="generic")
+        return pos
 
     # ----------------------- MODO 4: [u, v, vr, z] -----------------------------
 
@@ -470,96 +473,6 @@ class DroneVelocityEnv:
         return cps, dt_step
 
 
-    def plot_xyz_dual_x(self, show: bool = True, save_path: str | None = None, separate: bool = True):
-        """
-        Dibuja X, Y, Z con doble eje X:
-        - Abajo: Tiempo [s]
-        - Arriba: Step [#] (calculado con ctrls_per_step para evitar 'step' inflado)
-        Por defecto genera 3 PNG separados (uno por coordenada) cuando 'separate=True'.
-        Si 'separate=False', genera una sola figura con 3 filas.
-
-        Para corregir el step, define UNO de estos atributos antes de plotear:
-        - self.ctrls_per_step         (entero)
-        - self.rl_hz                  (Hz de RL); infiere ctrls_per_step = round(control_hz / rl_hz)
-        """
-        if not self.positions_history:
-            print("[plot_xyz_dual_x] No hay datos para graficar.")
-            return
-
-        import numpy as np
-        import matplotlib.pyplot as plt
-        from matplotlib.ticker import MaxNLocator, FuncFormatter
-
-        P = np.vstack(self.positions_history)  # (N, 3)
-        
-        N = P.shape[0]
-
-        dtc = float(self.dt_control)
-        t = np.arange(N, dtype=float) * dtc
-
-        # Relación controles↔step y funciones de mapeo para el eje secundario
-        ctrls_per_step, dt_step = self._infer_step_params()
-
-        # Mapeos (continuos) entre tiempo y step (aprox lineal, suficiente para ticks correctos)
-        def time_to_step(x):
-            return x / dt_step
-
-        def step_to_time(s):
-            return s * dt_step
-
-        coord_labels = ["X [m]", "Y [m]", "Z [m]"]
-        coord_keys = ["x", "y", "z"]
-
-        if separate:
-            files = {}
-            for i, key in enumerate(coord_keys):
-                fig, ax = plt.subplots(figsize=(10, 4))
-                ax.plot(t, P[:, i], linewidth=1.8)
-                ax.set_xlabel("Tiempo [s]")
-                ax.set_ylabel(coord_labels[i])
-                ax.grid(True, alpha=0.6)
-
-                # Eje X secundario arriba con unidades de Step
-                secax = ax.secondary_xaxis('top', functions=(time_to_step, step_to_time))
-                secax.set_xlabel("Step [#]")
-                secax.xaxis.set_major_locator(MaxNLocator(integer=True))
-                secax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(round(v))}"))
-
-                ax.set_title(f"{coord_labels[i].split()[0]} vs Tiempo (eje superior: Step)")
-
-                if save_path:
-                    path_i = save_path.replace(".png", f"_{key}.png")
-                    fig.savefig(path_i, dpi=150, bbox_inches="tight")
-                    files[key] = path_i
-                if show:
-                    plt.show()
-                plt.close(fig)
-            return files if save_path else None
-
-        else:
-            fig, axes = plt.subplots(nrows=3, ncols=1, figsize=(10, 9), sharex=True)
-            for i, ax in enumerate(axes):
-                ax.plot(t, P[:, i], linewidth=1.8)
-                if i == 2:
-                    ax.set_xlabel("Tiempo [s]")
-                ax.set_ylabel(coord_labels[i])
-                ax.grid(True, alpha=0.6)
-
-                secax = ax.secondary_xaxis('top', functions=(time_to_step, step_to_time))
-                if i == 0:
-                    secax.set_xlabel("Step [#]")
-                secax.xaxis.set_major_locator(MaxNLocator(integer=True))
-                secax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(round(v))}"))
-
-            axes[0].set_title("Posición con doble eje X (Tiempo abajo, Step arriba)")
-            fig.tight_layout()
-
-            if save_path:
-                fig.savefig(save_path, dpi=150, bbox_inches="tight")
-            if show:
-                plt.show()
-            plt.close(fig)
-
 
 
 
@@ -768,3 +681,87 @@ class DroneVelocityEnv:
             plt.close(fig)
 
 
+
+
+"""
+    def plot_xyz_dual_x(self, show: bool = True, save_path: str | None = None, separate: bool = True):
+
+        if not self.positions_history:
+            print("[plot_xyz_dual_x] No hay datos para graficar.")
+            return
+
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from matplotlib.ticker import MaxNLocator, FuncFormatter
+
+        P = np.vstack(self.positions_history)  # (N, 3)
+        
+        N = P.shape[0]
+
+        dtc = float(self.dt_control)
+        t = np.arange(N, dtype=float) * dtc
+
+        # Relación controles↔step y funciones de mapeo para el eje secundario
+        ctrls_per_step, dt_step = self._infer_step_params()
+
+        # Mapeos (continuos) entre tiempo y step (aprox lineal, suficiente para ticks correctos)
+        def time_to_step(x):
+            return x / dt_step
+
+        def step_to_time(s):
+            return s * dt_step
+
+        coord_labels = ["X [m]", "Y [m]", "Z [m]"]
+        coord_keys = ["x", "y", "z"]
+
+        if separate:
+            files = {}
+            for i, key in enumerate(coord_keys):
+                fig, ax = plt.subplots(figsize=(10, 4))
+                ax.plot(t, P[:, i], linewidth=1.8)
+                ax.set_xlabel("Tiempo [s]")
+                ax.set_ylabel(coord_labels[i])
+                ax.grid(True, alpha=0.6)
+
+                # Eje X secundario arriba con unidades de Step
+                secax = ax.secondary_xaxis('top', functions=(time_to_step, step_to_time))
+                secax.set_xlabel("Step [#]")
+                secax.xaxis.set_major_locator(MaxNLocator(integer=True))
+                secax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(round(v))}"))
+
+                ax.set_title(f"{coord_labels[i].split()[0]} vs Tiempo (eje superior: Step)")
+
+                if save_path:
+                    path_i = save_path.replace(".png", f"_{key}.png")
+                    fig.savefig(path_i, dpi=150, bbox_inches="tight")
+                    files[key] = path_i
+                if show:
+                    plt.show()
+                plt.close(fig)
+            return files if save_path else None
+
+        else:
+            fig, axes = plt.subplots(nrows=3, ncols=1, figsize=(10, 9), sharex=True)
+            for i, ax in enumerate(axes):
+                ax.plot(t, P[:, i], linewidth=1.8)
+                if i == 2:
+                    ax.set_xlabel("Tiempo [s]")
+                ax.set_ylabel(coord_labels[i])
+                ax.grid(True, alpha=0.6)
+
+                secax = ax.secondary_xaxis('top', functions=(time_to_step, step_to_time))
+                if i == 0:
+                    secax.set_xlabel("Step [#]")
+                secax.xaxis.set_major_locator(MaxNLocator(integer=True))
+                secax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(round(v))}"))
+
+            axes[0].set_title("Posición con doble eje X (Tiempo abajo, Step arriba)")
+            fig.tight_layout()
+
+            if save_path:
+                fig.savefig(save_path, dpi=150, bbox_inches="tight")
+            if show:
+                plt.show()
+            plt.close(fig)
+
+"""

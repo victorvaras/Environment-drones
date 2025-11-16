@@ -1202,6 +1202,7 @@ class SionnaRT:
             return True  # no hay movimiento efectivo
 
         # Chequeo de límites (si se pide)
+        check_bounds = False
         if check_bounds:
             if getattr(self, "scene_bounds", None) is not None:
                 pmin, pmax = self.scene_bounds
@@ -1246,7 +1247,7 @@ class SionnaRT:
         # Ningún rayo intersectó
         return True
     
-    # === Helpers y dumps de depuración (PEGAR DENTRO DE LA CLASE SionnaRT) ===
+    # === Helpers y dumps de depuración 
 
     def _safe_get(self, obj, name, default=None):
         return getattr(obj, name, default) if obj is not None else default
@@ -1279,81 +1280,3 @@ class SionnaRT:
         except Exception:
             return str(ypr)
 
-    def debug_dump_rt_config(self, *, header="=== SionnaRT DEBUG DUMP ==="):
-        print("\n" + str(header))
-        print(f"Scene: {self.scene_name}")
-        print(f"Frequency: {self.freq_hz/1e9:.6f} GHz | λ = {self._f_lambda(self.freq_hz):.4e} m")
-        print(f"Antenna mode: {self.antenna_mode}")
-
-        # Arrays globales
-        print("--- Arrays (scene-global) ---")
-        print(f" TX.array: pattern={self._pattern_name(self.scene.tx_array)}, "
-            f"pol={self._pol_name(self.scene.tx_array)}, "
-            f"shape={self._array_shape(self.scene.tx_array)}")
-        print(f" RX.array: pattern={self._pattern_name(self.scene.rx_array)}, "
-            f"pol={self._pol_name(self.scene.rx_array)}, "
-            f"shape={self._array_shape(self.scene.rx_array)}")
-
-        # Solver
-        print("--- Solver flags ---")
-        print(f" max_depth={self.max_depth}, los={self.los}, specular={self.specular_reflection}, diffuse={self.diffuse_reflection},")
-        print(f" refraction={self.refraction}, diffraction={self.diffraction} "
-            f"(edge={self.edge_diffraction}, lit_region={self.diffraction_lit_region})")
-        print(f" synthetic_array={self.synthetic_array}, samples_per_src={self.samples_per_src}, "
-            f"max_num_paths_per_src={self.max_num_paths_per_src}, seed={self.seed}")
-
-        # TXs
-        print("--- TXs ---")
-        try:
-            total_tx_dbm = self._total_tx_power_dbm()
-        except Exception:
-            total_tx_dbm = float(self.tx_power_dbm_total)
-        print(f" total_configured_tx_power={float(self.tx_power_dbm_total):.2f} dBm  (sum_real={total_tx_dbm:.2f} dBm)")
-
-        if not self.txs:
-            print(" [!] No hay TX instanciados.")
-        for k, tx in enumerate(self.txs):
-            pos = self._safe_get(tx, "position", None)
-            ori = self._safe_get(tx, "orientation", None)
-            pwr = self._safe_get(tx, "power_dbm", None)
-            vel = self._safe_get(tx, "velocity", None)
-            try:
-                pwr_f = float(pwr) if pwr is not None else "N/A"
-            except Exception:
-                pwr_f = "N/A"
-            print(f"  TX[{k}]: name={getattr(tx,'name','?')}, "
-                f"pos={list(pos) if pos is not None else 'N/A'}, "
-                f"ori={self._ypr_str(ori)}, power_dbm={pwr_f}, vel={vel}")
-
-        # RXs
-        print("--- RX list ---")
-        if not self.rx_list:
-            print("  (vacío)")
-        for k, rx in enumerate(self.rx_list):
-            pos = self._safe_get(rx, "position", None)
-            vel = self._safe_get(rx, "velocity", None)
-            print(f"  RX[{k}]: name={getattr(rx,'name','?')}, pos={list(pos) if pos is not None else 'N/A'}, vel={vel}")
-
-        # Sanity checks
-        print("--- Sanity checks ---")
-        tx_pat = self._pattern_name(self.scene.tx_array).lower()
-        if self.antenna_mode.upper().startswith("SECTOR") and ("iso" in tx_pat or "isotropic" in tx_pat or "dipole" in tx_pat):
-            print(" [WARN] antenna_mode=SECTOR*, pero TX.pattern es isotrópico/dipolo. "
-                "¿Querías 'tr38901' (3GPP 3D)?")
-        rx_pat = self._pattern_name(self.scene.rx_array).lower()
-        if rx_pat == "dipole" and str(self.rx_array_pattern).lower() != "dipole":
-            print(f" [WARN] RX.pattern efectivo = dipole, pero pediste '{self.rx_array_pattern}'. Revisa build_scene().")
-        rx_pol = self._pol_name(self.scene.rx_array)
-        if rx_pol.upper() != str(self.rx_array_polarization).upper():
-            print(f" [WARN] RX.polarization efectivo = {rx_pol}, pero pediste '{self.rx_array_polarization}'.")
-
-        if self.txs:
-            try:
-                y, p, r = [float(v) for v in self.txs[0].orientation]
-                if abs(p) >= 80.0:
-                    print(f" [NOTE] pitch={p:.1f}° (casi vertical). Con panel 3GPP, "
-                        f"prueba downtilt típico de ~ -6° a -12°.")
-            except Exception:
-                pass
-
-        print("=== END DEBUG DUMP ===\n")

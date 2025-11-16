@@ -35,6 +35,8 @@ class DroneEnv(gym.Env):
             render_mode: str | None = None,
             drone_start: tuple[float, float, float] = (0.0, 0.0, 20.0),
 
+            mode_set_vuelo: int = 7,
+
     ):
         super().__init__()
         assert render_mode in (None, "human", "rgb_array"), \
@@ -84,14 +86,14 @@ class DroneEnv(gym.Env):
 
 
         #Inicializacion para movimiento de dron realista
-        SELECT_MODE = 6  # cambia a 4 o 7 para probar otros
+        self.mode_set_vuelo = mode_set_vuelo  
 
         cfg = DroneVelocityEnvConfig(
             start_xyz=self._start,
             start_rpy=(0.0, 0.0, 0.0),
             control_hz=120,
             physics_hz=240,
-            mode=SELECT_MODE,
+            mode=self.mode_set_vuelo,
             render=False,
             drone_model="cf2x",
             seed=42,
@@ -150,8 +152,7 @@ class DroneEnv(gym.Env):
             # Fallback si tu contenedor expone otra API
             self.num_ut = int(getattr(self.receptores, "num", getattr(self.receptores, "n", 0)))
 
-
-        self.rt.debug_dump_rt_config(header="=== POST build_scene ===")
+        
 
         return obs, info
 
@@ -159,11 +160,11 @@ class DroneEnv(gym.Env):
         self.step_count += 1
 
         # Movimiento del dron
-        self.dron.step_delta(action)
+        #self.dron.step_delta(action)
         #self.rt.move_tx(self.dron.pos)
 
         
-
+        """
         if (self.dron_Realista.cfg.mode == 6):
             posicion = self.dron_Realista.step_mode6_holdz(vx=action[0], vy=action[1], vr=0, dt=0.1, z_ref=self._start[2])
             movimiento_normalizado = posicion[0]
@@ -179,9 +180,16 @@ class DroneEnv(gym.Env):
             movimiento = [
                 ([80.0, 0.0, 0.0, 100.0], 0.1),
                 ]
-            posicion = self.dron_Realista.step_sequence_mode7(movimiento)
-            movimiento_normalizado = posicion[0][0]
+            
+            mov = action
+            dt = 0.1
+            posicion = self.dron_Realista.step_mode7(mov, dt)
+            movimiento_normalizado = posicion[0]
 
+            #posicion = self.dron_Realista.step_sequence_mode7(movimiento)
+            #movimiento_normalizado = posicion[0][0]
+        """
+        movimiento_normalizado = self.dron_Realista.step_move(action, dt=0.1)
         movimiento_valido = self.rt.is_move_valid(self.rt.tx.position, movimiento_normalizado )
         
         

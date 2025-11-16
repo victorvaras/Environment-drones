@@ -52,7 +52,7 @@ RX_POSITIONS = [
     
 
 ]
-MAX_STEPS = 400
+MAX_STEPS = 100
 
 # Compara dos frecuencias (en MHz). Cambia a lo que necesites.
 FREQS_MHZ = [3500.0] #28000
@@ -1411,6 +1411,8 @@ def plot_slope_all_ues_onefig(df_all: pd.DataFrame, freq_mhz: float, out_dir: Pa
 
 def run_episode(freq_mhz: float) -> dict:
 
+    mode_set_vuelo = 0
+
     env = DroneEnv(
         render_mode=None,
         scene_name=SCENE,
@@ -1419,6 +1421,7 @@ def run_episode(freq_mhz: float) -> dict:
         rx_positions=RX_POSITIONS if RX_POSITIONS else None,
         antenna_mode="SECTOR3_3GPP",  # "ISO" o "SECTOR3_3GPP"
         frequency_mhz=freq_mhz,
+        mode_set_vuelo=mode_set_vuelo,
     )
 
     obs, info = env.reset(seed=0)
@@ -1439,8 +1442,8 @@ def run_episode(freq_mhz: float) -> dict:
         steps.append(t)
 
         
-        vy = float(np.random.uniform(-5.0, 5.0))
-        a = [5.0, 0.0, 10.0]
+        
+        a = [0.30, 0.30, 0.0, 0.0]
         b = [0, 0, 0]
 
         obs, rew, done, trunc, info = env.step(a, b)
