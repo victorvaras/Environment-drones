@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import datetime
+import socialforce
+import torch
+from socialforce import potentials
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
@@ -25,6 +28,7 @@ class DroneEnv(gym.Env):
     def __init__(
             self,
             rx_positions: list[tuple[float, float, float]] | None = None,
+            rx_goals: list[tuple[float, float, float]] | None = None,
             frequency_mhz: float = 3500.0,
             tx_power_dbm: float = 30.0,
             bandwidth_hz: float = 20e6,
@@ -51,6 +55,60 @@ class DroneEnv(gym.Env):
         numero_receptores = self.receptores.n
         rx_velocities_mps = [(0.0, 0.0, 0.0) for _ in range(numero_receptores)]
 
+        # --- ¡NUEVO: INICIALIZAR EL SIMULADOR SFM! ---
+
+        # 1. Definimos nuestro 'delta_t' (paso de tiempo)
+        dt = 0.1
+
+        # 2. Creamos el potencial de repulsión
+        ped_ped_potential = potentials.PedPedPotential(2.1)
+
+        # 3. Sincronizamos el 'dt' del potencial
+        ped_ped_potential.delta_t_step = dt
+
+        # 4. Creamos el simulador, pasándole AMBAS cosas
+        #    Y AÑADIENDO 'oversampling=1' para sincronizar la física.
+        self.sfm_sim = socialforce.Simulator(
+            delta_t=dt,
+            ped_ped=ped_ped_potential,
+            oversampling=1  # <-- ¡LA CORRECCIÓN MÁGICA!
+        )
+
+        # 5. Convertimos las posiciones iniciales y metas
+        #    (El resto de tu __init__ que crea el tensor está perfecto)
+        np_initial_states = np.array(rx_positions)
+        np_goal_states = np.array(rx_goals)
+
+        self.sfm_goals_2d = np_goal_states[:, :2]
+
+        # 4. Creamos las velocidades iniciales (vx, vy) -> (todos parten quietos)
+        initial_velocities_np = np.zeros((numero_receptores, 2))
+
+        # 5. Creamos las aceleraciones iniciales (ax, ay) -> (parten quietos)
+        initial_accelerations_np = np.zeros((numero_receptores, 2))
+
+        # 6. Creamos un "tau" (tiempo de relajación)
+        initial_taus_np = np.full((numero_receptores, 1), 0.5)
+
+        # 7. ¡LA CORRECCIÓN! Creamos la "velocidad preferida" (v_pref)
+        #    (ej. 1.3 m/s, una velocidad de caminata normal)
+        preferred_speeds_np = np.full((numero_receptores, 1), 1.3)
+
+        # 8. Creamos el "Tensor de Estado" inicial de 10 columnas:
+        #    (x, y, vx, vy, ax, ay, gx, gy, tau, v_pref)
+
+        # Primero lo creamos en NumPy
+        initial_state_np = np.hstack([
+            np_initial_states[:, :2],  # Col 0, 1: (x, y)
+            initial_velocities_np,  # Col 2, 3: (vx, vy)
+            initial_accelerations_np,  # Col 4, 5: (ax, ay)
+            self.sfm_goals_2d,  # Col 6, 7: (gx, gy)
+            initial_taus_np,  # Col 8: (tau)
+            preferred_speeds_np  # Col 9: (v_pref)
+        ])
+
+        # Y ahora lo convertimos a un Tensor de PyTorch
+        self.sfm_current_state = torch.tensor(initial_state_np, dtype=torch.float32)
 
         # --- Iniciando Sionna RT ---
         self.rt = SionnaRT(
@@ -135,7 +193,7 @@ class DroneEnv(gym.Env):
 
         return obs, info
 
-    def step(self, action: np.ndarray, actionR: np.ndarray | None = None):
+    def step(self, action: np.ndarray):
         self.step_count += 1
 
         # Movimiento del dron
@@ -143,22 +201,60 @@ class DroneEnv(gym.Env):
         self.rt.move_tx(self.dron.pos)
 
         # --- Movimiento de personas / receptores ---
-        if actionR is None:
-            actionR = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+        # 1. Obtenemos el "estado propuesto" por el SFM
+        proposed_state = self.sfm_sim(self.sfm_current_state)
 
-        # Posiciones propuestas para todos los receptores
-        rx_positions = self.receptores.step_all(actionR)
+        # 2. Convertimos la respuesta de Torch a NumPy
+        proposed_state_np = proposed_state.detach().numpy()
 
-        for rx, pos in zip(self.rt.rx_list, rx_positions):
-            a = np.array(rx.position, dtype=np.float32)  # Posición actual
-            b = np.array(pos, dtype=np.float32)  # Nueva posición propuesta
+        # --- DEBUG: Imprimir qué está pasando ---
+        if self.step_count == 1:  # Imprime solo en el primer paso
+            print("\n--- DEBUG SFM (Primer Step) ---")
+            print("Metas (Goals) 2D:\n", self.sfm_goals_2d)
+            print("Estado Actual (NP):\n", self.sfm_current_state.numpy()[:, 0:2])
+            print("Estado Propuesto (NP):\n", proposed_state_np[:, 0:2])
+            print("---------------------------------\n")
+        # --- FIN DEBUG ---
 
-            if self.rt.is_move_valid_receptores(a, b):
-                # ✅ Movimiento permitido: actualizamos posición
-                rx.position = [float(b[0]), float(b[1]), float(b[2])]
+        # 3. Obtenemos las posiciones 3D actuales (para validar)
+        current_positions_3d = np.array([rx.position for rx in self.rt.rx_list])
+
+        # 4. Extraemos las posiciones y velocidades 2D propuestas (de NumPy)
+        proposed_pos_2d = proposed_state_np[:, 0:2]
+        proposed_vel_2d = proposed_state_np[:, 2:4]
+
+        # 5. Preparamos el *nuevo* array de estado validado
+        new_validated_state_np = self.sfm_current_state.numpy().copy()
+
+        # 6. Bucle de validación
+        for i, rx in enumerate(self.rt.rx_list):
+
+            pos_actual_3d = current_positions_3d[i]
+
+            pos_propuesta_3d = np.array([0.0, 0.0, 0.0])
+            pos_propuesta_3d[0] = proposed_pos_2d[i, 0]
+            pos_propuesta_3d[1] = proposed_pos_2d[i, 1]
+            pos_propuesta_3d[2] = pos_actual_3d[2]
+
+            if self.rt.is_move_valid_receptores(pos_actual_3d, pos_propuesta_3d):
+                # ✅ Movimiento VÁLIDO:
+                rx.position = [float(p) for p in pos_propuesta_3d]
+                rx.velocity = [
+                    float(proposed_vel_2d[i, 0]),
+                    float(proposed_vel_2d[i, 1]),
+                    0.0
+                ]
+                new_validated_state_np[i, 0:2] = proposed_pos_2d[i]
+                new_validated_state_np[i, 2:4] = proposed_vel_2d[i]
+
             else:
-                # 🚫 Movimiento bloqueado: mantenemos posición actual
-                print(f"[COLISIÓN BLOQUEADA] {a} -> {b}")
+                # 🚫 Movimiento BLOQUEADO (Colisión):
+                rx.velocity = [0.0, 0.0, 0.0]
+                new_validated_state_np[i, 2:4] = [0.0, 0.0]
+
+        # 7. Convertimos el array de NumPy validado
+        #    de vuelta a un Tensor de Torch para el *siguiente* step.
+        self.sfm_current_state = torch.tensor(new_validated_state_np, dtype=torch.float32)
 
 
 

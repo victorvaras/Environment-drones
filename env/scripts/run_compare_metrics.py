@@ -52,7 +52,21 @@ RX_POSITIONS = [
     (50.0,    0.0, 1.5),
     (-90, -55, 1.5),
 ]
-MAX_STEPS = 50
+
+# Metas NUEVAS (más cortas y realistas)
+#RX_GOALS = [
+#    (30.0, -30.0, 1.5), # Meta UE1 (Naranjo): Moverse solo 10m a la derecha
+#    (50.0, -10.0, 1.5), # Meta UE0 (Verde): Moverse solo 10m (eje Y)
+#    (-80.0, -55.0, 1.5), # Meta UE2 (Rojo): Moverse solo 10m a la derecha
+#]
+
+RX_GOALS = [
+    (80.0, -30.0, 1.5),  # Meta UE0 (20.0, -30.0, 1.5)
+    (-80.0, 0.0, 1.5),   # Meta UE1 (50.0,   0.0, 1.5)
+    (80.0, -55.0, 1.5),  # Meta UE2 (-90,    -55, 1.5)
+]
+
+MAX_STEPS = 300
 
 # Compara dos frecuencias (en MHz). Cambia a lo que necesites.
 FREQS_MHZ = [3500.0] #28000
@@ -188,6 +202,7 @@ def run_episode(freq_mhz: float) -> dict:
         max_steps=MAX_STEPS,
         drone_start=DRONE_START,
         rx_positions=RX_POSITIONS if RX_POSITIONS else None,
+        rx_goals=RX_GOALS,  # <-- ¡AÑADIDO!
         antenna_mode="SECTOR3_3GPP",  # "ISO" o "SECTOR3_3GPP"
         frequency_mhz=freq_mhz,
     )
@@ -210,9 +225,9 @@ def run_episode(freq_mhz: float) -> dict:
         steps.append(t)
 
         a = [0, 0, 0]
-        b = [1, 0, 0]
+        #b = [1, 0, 0]
 
-        obs, rew, done, trunc, info = env.step(a, b)
+        obs, rew, done, trunc, info = env.step(a)
 
         ue_metrics_step = info.get("ue_metrics", [])
         tbler_running   = info.get("tbler_running_per_ue", None)
