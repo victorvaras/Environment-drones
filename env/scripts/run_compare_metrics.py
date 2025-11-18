@@ -41,7 +41,7 @@ SCENE = "simple_street_canyon_with_cars"  # p.ej. "santiago.xml", "munich"
 DRONE_START = (0.0, 0.0, 10.0)
 RX_POSITIONS = [
     #(-50.0, 0.0, 1.5),
-    (20.0, -30.0, 1.5),
+    #(20.0, -30.0, 1.5),
     #(20.0, 0.0, 1.5),
     #(-20.0, 0.0, 1.5),
     #(0, 0, 1.5),
@@ -49,21 +49,60 @@ RX_POSITIONS = [
     #(0.0,   30.0, 1.5),
     #(20.0,  -30.0, 1.5),
     #(80.0,   40.0, 1.5),
-    (50.0,    0.0, 1.5),
-    (-90, -55, 1.5),
+
+    #Prueba original con 3 receptores
+    #(20.0, -30.0, 1.5),
+    #(50.0,    0.0, 1.5),
+    #(-90, -55, 1.5),
+
+    #Prueba de Colisión entre 2 receptores (sin colisión)
+    #(-40.0, 0.0, 1.5),  #UE0
+    #(-20.0, 0.0, 1.5),  #UE1
+
+    #Prueba de Colisión entre 3 receptores (sin colisión)
+    #(-40.0, 0.0, 1.5),   # UE0 empieza a la izquierda
+    #(0.0, 0.0, 1.5),     # UE1 empieza en el centro
+    #(-40.0, -10.0, 1.5), # UE2 empieza abajo a la izquierda
+
+    #Prueba de Colisión entre 7 receptores (sin colisión)
+    #Grupo 1 (4 agentes) - Empiezan a la izquierda
+    (-40.0, 1.0, 1.5),  #UE0
+    (-40.0, -1.0, 1.5), #UE1
+    (-38.0, 0.5, 1.5),  #UE2
+    (-38.0, -0.5, 1.5), #UE3
+
+    # Grupo 2 (3 agentes) - Empiezan a la derecha
+    (-10.0, 0.0, 1.5),  #UE4
+    (-10.0, 1.0, 1.5),  #UE5
+    (-10.0, -1.0, 1.5), #UE6
 ]
 
-# Metas NUEVAS (más cortas y realistas)
-#RX_GOALS = [
-#    (30.0, -30.0, 1.5), # Meta UE1 (Naranjo): Moverse solo 10m a la derecha
-#    (50.0, -10.0, 1.5), # Meta UE0 (Verde): Moverse solo 10m (eje Y)
-#    (-80.0, -55.0, 1.5), # Meta UE2 (Rojo): Moverse solo 10m a la derecha
-#]
-
 RX_GOALS = [
-    (80.0, -30.0, 1.5),  # Meta UE0 (20.0, -30.0, 1.5)
-    (-80.0, 0.0, 1.5),   # Meta UE1 (50.0,   0.0, 1.5)
-    (80.0, -55.0, 1.5),  # Meta UE2 (-90,    -55, 1.5)
+    #Prueba original con 3 receptores
+    #(80.0, -30.0, 1.5),  # Meta UE0 (20.0, -30.0, 1.5)
+    #(-80.0, 0.0, 1.5),   # Meta UE1 (50.0,   0.0, 1.5)
+    #(80.0, -55.0, 1.5),  # Meta UE2 (-90,    -55, 1.5)
+
+    #Prueba de Colisión entre 2 receptores
+    #(-10.0, 0.0, 1.5),   # UE0 quiere ir a la derecha
+    #(-50.0, 0.0, 1.5),  # UE1 quiere ir a la izquierda
+
+    #Prueba de Colisión entre 3 receptores
+    #(0.0, 0.0, 1.5),     # UE0 (Verde) quiere ir al centro
+    #(-40.0, 0.0, 1.5),   # UE1 (Naranjo) quiere ir a la izquierda
+    #(-20.0, -5.0, 1.5),  # UE2 (Rojo) quiere ir en diagonal
+
+    #Prueba de Colisión entre 7 receptores (sin colisión)
+    # Metas Grupo 1
+    (-10.0, 1.0, 1.5),   # UE0
+    (-10.0, -1.0, 1.5),  # UE1
+    (-12.0, 0.5, 1.5),   # UE2
+    (-12.0, -0.5, 1.5),  # UE3
+
+    # Metas Grupo 2
+    (-40.0, 0.0, 1.5),   # UE4
+    (-40.0, 1.0, 1.5),   # UE5
+    (-40.0, -1.0, 1.5),  # UE6
 ]
 
 MAX_STEPS = 300

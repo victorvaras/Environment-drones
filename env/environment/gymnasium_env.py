@@ -61,7 +61,12 @@ class DroneEnv(gym.Env):
         dt = 0.1
 
         # 2. Creamos el potencial de repulsión
-        ped_ped_potential = potentials.PedPedPotential(2.1)
+        #    Esto les da la "fuerza lateral" para esquivar.
+        ped_ped_potential = potentials.PedPedPotential2D(
+            v0=5.0,  #Fuerza de repulsión
+            sigma=1.0,  #Alcance de la fuerza
+            asymmetry=0.3  #Factor para "preferir" un lado (esquive)
+        )
 
         # 3. Sincronizamos el 'dt' del potencial
         ped_ped_potential.delta_t_step = dt
@@ -71,7 +76,8 @@ class DroneEnv(gym.Env):
         self.sfm_sim = socialforce.Simulator(
             delta_t=dt,
             ped_ped=ped_ped_potential,
-            oversampling=1  # <-- ¡LA CORRECCIÓN MÁGICA!
+            oversampling=1,
+            field_of_view =-1
         )
 
         # 5. Convertimos las posiciones iniciales y metas
