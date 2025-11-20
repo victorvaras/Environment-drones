@@ -7,6 +7,7 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  #0 = all, 1 = info, 2 = warnings, 3 = 
 
 # === Bootstrap sys.path a la raíz del proyecto (dos niveles arriba) ===
 import sys
+import time
 from pathlib import Path
 project_root = Path(__file__).resolve().parents[2]
 if str(project_root) not in sys.path:
@@ -1521,6 +1522,8 @@ def plot_slope_all_ues_onefig(df_all: pd.DataFrame, freq_mhz: float, out_dir: Pa
 
 
 def main():
+    start_time = time.perf_counter()
+
     print(f"[INFO] Guardando resultados en: {OUT_DIR}")
 
     
@@ -1579,6 +1582,9 @@ def main():
 
 
     print(f"[DONE] Imágenes en: {OUT_DIR}")
+
+    elapsed = time.perf_counter() - start_time
+    print(f"Tiempo total transcurrido: {elapsed:.3f} s ({elapsed / 60:.2f} min)")
 
 
 if __name__ == "__main__":

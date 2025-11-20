@@ -1236,3 +1236,114 @@ class SionnaRT:
                 return False
 
         return True
+
+    # ============================================================
+    # SENSOR DINÁMICO (Híbrido con DrJit Sync)
+    # ============================================================
+    def get_obstacle_forces(self, rx_positions, sensor_radius=4.0, num_rays=12, force_factor=12.0):
+        """
+        Simula un sensor de 360° para cada agente utilizando el motor de Raytracing de Sionna/Mitsuba.
+
+        Funcionamiento:
+        1. Lanza 'num_rays' rayos desde la posición del agente.
+        2. Si un rayo detecta un obstáculo (malla 3D) dentro del 'sensor_radius':
+           - Calcula una fuerza de repulsión exponencial (más cerca = más fuerte).
+           - Agrega una componente tangencial ('deslizamiento') para evitar bloqueos.
+        3. Sincroniza el hilo de DrJit para evitar desbordamiento de memoria (Crash fix).
+
+        Args:
+            rx_positions: Coordenadas actuales [x, y, z] de los receptores.
+            sensor_radius: Distancia máxima de visión del sensor (metros).
+            num_rays: Cantidad de rayos por agente (resolución del sensor).
+            force_factor: Magnitud base de la fuerza de repulsión.
+        """
+        import numpy as np
+        import mitsuba as mi
+        import drjit as dr  #Import crucial para el motor de cálculo
+
+        n_agents = len(rx_positions) #Cantidad de agentes
+        forces = np.zeros((n_agents, 2), dtype=np.float32)
+
+        #Se verifica que la escena (Mitsuba) esté cargada
+        mi_scene = getattr(self, "mi_scene", getattr(self.scene, "mi_scene", None))
+        if mi_scene is None: return forces
+
+        # --- 1. PRE-CÁLCULO DE DIRECCIONES ---
+        #Se generan los ángulos de los rayos (0 a 360 grados)
+        angles = np.linspace(0, 2 * np.pi, num_rays, endpoint=False)
+        dir_x = np.cos(angles)
+        dir_y = np.sin(angles)
+
+        # --- 2. BUCLE DE AGENTES ---
+        for i, pos in enumerate(rx_positions):
+            #Se convierten a float de Python puro para evitar
+            #conflictos entre los Tensores de DrJit y los Arrays de NumPy.
+            px = float(pos[0])
+            py = float(pos[1])
+            pz = float(pos[2])
+            origin = mi.Point3f(px, py, pz)
+
+            agent_fx = 0.0
+            agent_fy = 0.0
+
+            # --- 3. BUCLE DE RAYOS  ---
+            for r in range(num_rays):
+                dx = float(dir_x[r])
+                dy = float(dir_y[r])
+
+                #Se define el rayo: Origen -> Dirección
+                ray = mi.Ray3f(origin, mi.Vector3f(dx, dy, 0.0))
+                ray.maxt = sensor_radius
+
+                #Se consulta al motor de física (Raycasting)
+                si = mi_scene.ray_intersect(ray)
+
+                # --- 4. EXTRACCIÓN DE DATOS ---
+                #Sionna/DrJit retorna un Tensor o un Escalar.
+                #Este bloque estandariza la respuesta a un 'float' simple.
+                hit_dist = sensor_radius + 1.0
+                try:
+                    val = si.t
+                    if hasattr(val, 'numpy'):
+                        v = val.numpy()
+                        hit_dist = float(v[0]) if v.shape else float(v)
+                    elif hasattr(val, 'item'):
+                        hit_dist = float(val.item())
+                    else:
+                        hit_dist = float(val)
+                except:
+                    pass #Si falla la lectura, se asume que no hubo impacto
+
+                # --- 5. CÁLCULO DE FUERZAS ---
+                if hit_dist < sensor_radius:
+                    #Magnitud Exponencial
+                    #La fuerza crece drásticamente si la distancia se acerca a 0.3m (radio del cuerpo)
+                    #La fuerza crece a medida que se acerca al obstáculo
+                    dist_surf = max(0.001, hit_dist - 0.3)
+                    mag = force_factor * np.exp(-dist_surf / 0.8)
+
+                    #Descomposición de Vectores
+                    #Vector Repulsión (Normal): Se encarga de empujar en dirección opuesta al obstáculo.
+                    push_x = -dx
+                    push_y = -dy
+
+                    #Vector Deslizamiento (Tangencial)
+                    #Empuja hacia el lado izquierdo (regla de la mano izquierda).
+                    #Esto permite que el agente "resbale" por la pared en vez de quedarse pegado.
+                    slide_x = -dy
+                    slide_y = dx
+
+                    #Suma Ponderada
+                    #Se combina el empuje (para no chocar) y deslizamiento (para rodear).
+                    agent_fx += mag * (push_x + 0.8 * slide_x)
+                    agent_fy += mag * (push_y + 0.8 * slide_y)
+
+            forces[i, 0] = agent_fx
+            forces[i, 1] = agent_fy
+
+        # --- 6. SINCRONIZACIÓN (CRÍTICO) ---
+        #Obliga a DrJit a terminar todos los cálculos pendientes en la GPU/CPU.
+        #Sin este apartado, la cola de tareas se llena más rápido de lo que se vacía, causando un crash.
+        dr.sync_thread()
+
+        return forces
