@@ -37,6 +37,7 @@ class DroneEnv(gym.Env):
             max_steps: int = 400,
             render_mode: str | None = None,
             drone_start: tuple[float, float, float] = (0.0, 0.0, 20.0),
+            run_metrics: bool = False
 
     ):
         super().__init__()
@@ -47,6 +48,7 @@ class DroneEnv(gym.Env):
         self._start = drone_start
         self.max_steps = int(max_steps)
         self.step_count = 0
+        self.run_metrics = run_metrics
 
         # --- Iniciando receptores ---
         self.receptores = ReceptoresManager([Receptor(*p) for p in rx_positions])
@@ -206,38 +208,18 @@ class DroneEnv(gym.Env):
         proposed_state = self.sfm_sim(self.sfm_current_state) #Se obtiene el "estado propuesto" por el SFM
         proposed_state_np = proposed_state.detach().numpy()   #Se convierte la respuesta de Torch a NumPy
 
-        #Se obtienen las posiciones actuales para el sensor
-        current_positions_3d = np.array([rx.position for rx in self.rt.rx_list])
-
-        proposed_pos_2d = proposed_state_np[:, 0:2]
-
         #Se extrae la velocidad deseada por el SFM (Vx, Vy)
         proposed_vel_2d = proposed_state_np[:, 2:4]
 
-        #Sensor Híbrido (Sionna Raycast)
-        #Escanea la geometría 3D real y devuelve un vector de fuerza
-        #que combina repulsión (atrás) y deslizamiento (lateral).
-        obstacle_forces = self.rt.get_obstacle_forces(
-            current_positions_3d,
-            sensor_radius=3.5,  #Rango de visión (Mira a 3.5 metros)
-            num_rays=12,        #Resolución del sensor (12 Rayos, buen balance velocidad/precisión)
-            force_factor=12.0   #Magnitud de la reacción
-        )
-
-        #Integración de Fuerzas
-        #Velocidad Final = Velocidad Social + (Fuerza Obstáculo * dt)
-        #Se suma la fuerza del muro u obstáculo a la velocidad del SFM
-        dt = 0.1
-        proposed_vel_2d[:, 0] += obstacle_forces[:, 0] * dt
-        proposed_vel_2d[:, 1] += obstacle_forces[:, 1] * dt
-
         #Integración de Euler (Cálculo de nueva posición)
         #Posición Nueva = Posición Actual + Velocidad Final * dt
+        dt = 0.1
         current_pos_2d = self.sfm_current_state.numpy()[:, 0:2]
         final_proposed_pos_2d = current_pos_2d + proposed_vel_2d * dt
 
         #Validación física y actualización
         #Se prepara el nuevo array de estado validado y actualización
+        current_positions_3d = np.array([rx.position for rx in self.rt.rx_list])
         new_validated_state_np = self.sfm_current_state.numpy().copy()
 
         for i, rx in enumerate(self.rt.rx_list):
@@ -274,7 +256,20 @@ class DroneEnv(gym.Env):
 
 
         # --- Ejecutar paso SYS y obtener métricas ---
-        sys_metrics = self.rt.run_sys_step()
+        #sys_metrics = self.rt.run_sys_step()
+        if self.run_metrics:
+            # Modo Lento (Completo)
+            sys_metrics = self.rt.run_sys_step()
+            info = {
+                "ue_metrics": sys_metrics["ue_metrics"],
+                "tbler_running_per_ue": sys_metrics.get("tbler_running_per_ue"),
+            }
+        else:
+            # Modo Rápido (Solo Física)
+            info = {
+                "ue_metrics": [],
+                "tbler_running_per_ue": [],
+            }
 
         # --- Recompensa ---
         # reward = float(np.mean(snr))
@@ -287,25 +282,13 @@ class DroneEnv(gym.Env):
         terminated = False
         truncated = self.step_count >= self.max_steps
 
-        info = {
-            # --- métricas por UE del step (ya las tenías) ---
-            "ue_metrics": sys_metrics["ue_metrics"],
-
-            # --- TBLER acumulada estilo tutorial ---
-            # Vector [num_ut] con la TBLER running a este step (idéntica al notebook de Sionna SYS)
-            "tbler_running_per_ue": sys_metrics.get("tbler_running_per_ue"),  # list[float] tamaño num_ut
-
-        }
-        
-        if self.render_mode is None:
-            return obs, reward, terminated, truncated, info
-        
-        elif self.render_mode == "human":
-            self._last_ue_metrics = info["ue_metrics"]  # cache para render
+        # Renderizado (usa 'info', que ya está seguro)
+        if self.render_mode == "human":
+            self._last_ue_metrics = info["ue_metrics"]
             self._last_tbler_running_per_ue = info.get("tbler_running_per_ue", None)
             self._render_to_figure()
         elif self.render_mode == "rgb_array":
-            self._last_ue_metrics = info["ue_metrics"]  # cache para render
+            self._last_ue_metrics = info["ue_metrics"]
             self._last_tbler_running_per_ue = info.get("tbler_running_per_ue", None)
             frame = self._render_to_array()
             info["frame"] = frame
