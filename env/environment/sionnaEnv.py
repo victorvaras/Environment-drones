@@ -1236,3 +1236,108 @@ class SionnaRT:
                 return False
 
         return True
+
+    # ============================================================
+    # Escaner de la escena (Slicer / Ray-Casting)
+    # ============================================================
+    #Función que se encarga de hacer un escaner de la escena (desde el cielo)
+    #Con la finalidad de obtener o generar un "mapa de puntos"
+    def get_sfm_obstacles(self, grid_density: float = 0.4) -> list[np.ndarray]:
+        """
+        Escanea la geometría de la escena 3D utilizando Ray Tracing vertical para generar
+        un mapa de ocupación 2D preciso para la navegación peatonal.
+
+        Funcionamiento:
+        1. Genera una cuadrícula de puntos sobre toda la escena.
+        2. Lanza rayos desde arriba hacia abajo (eje -Z).
+        3. Filtra los impactos según la altura para distinguir 'suelo caminable' de 'obstáculos'.
+
+        Args:
+            grid_density (float): Resolución del escaneo en metros.
+
+        Returns:
+            list[np.ndarray]: Lista conteniendo un array (N, 2) con las coordenadas X,Y
+                              de todos los puntos detectados como obstáculos.
+        """
+        import numpy as np
+        import mitsuba as mi
+        import drjit as dr
+
+        #Se valida si es que la escena esta cargada
+        if self.scene is None or self.mi_scene is None:
+            raise RuntimeError("SionnaRT: La escena no está construida.")
+
+        print(f"[SionnaRT Slicer] Iniciando escaneo de escena (Densidad: {grid_density}m)...")
+
+        #1.-Se define el área de escaneo
+        #Se obtienen los limites de toda la escena 3D de Sionna
+        bounds = self.mi_scene.bbox()
+
+        #Se añade un margen de +/- 2m con tal de asegurar cobertura total de la escena
+        min_x, min_y = bounds.min.x - 2.0, bounds.min.y - 2.0
+        max_x, max_y = bounds.max.x + 2.0, bounds.max.y + 2.0
+
+        #Se genera la cuadrícula de coordenadas con los puntos (X, Y) (Malla de puntos)
+        X = np.arange(min_x, max_x, grid_density, dtype=np.float32)
+        Y = np.arange(min_y, max_y, grid_density, dtype=np.float32)
+        grid_x, grid_y = np.meshgrid(X, Y)
+
+        #Se aplanan las matrices para tener listas lineales de coordenadas
+        flat_x = grid_x.flatten()
+        flat_y = grid_y.flatten()
+
+        #2.-Se configuran los rayos (Mitsuba / DrJit)
+        #Altura de origen: Se coloca el "agente" 5 metros por encima del objeto más alto
+        ray_origin_z = bounds.max.z + 5.0
+
+        #Conversión - mi.Float convierte el array de NumPy al formato nativo de Mitsuba (Float)
+        ox = mi.Float(flat_x)
+        oy = mi.Float(flat_y)
+
+        #'oz' es un escalar, pero DrJit realiza 'Broadcasting' automático.
+        #Con la finalidad de expandir este valor único para coincidan con la longitud de ox y oy
+        oz = mi.Float(ray_origin_z)
+
+        #Origen de los rayos: (x, y, z) (z = Alto)
+        origins_mi = mi.Point3f(ox, oy, oz)
+
+        #Dirección de los rayos: Hacia abajo (0, 0, -1)
+        dirs_mi = mi.Vector3f(0, 0, -1)
+
+        #Se crea el objeto Rayo vectorizado (contiene miles de rayos)
+        #Es un solo objeto que encapsula miles de rayos para cómputo paralelo.
+        rays = mi.Ray3f(origins_mi, dirs_mi)
+
+        #3. Intersección Masiva (Ray Tracing)
+        #Mitsuba procesará todos los rayos en paralelo
+        si = self.mi_scene.ray_intersect(rays)
+
+        #4. Filtrado de obstáculos (Slicer)
+        hit_z = si.p.z            #Coordenada Z donde golpeó el rayo (Altura del impacto).
+        is_valid = si.is_valid()  #Booleano: ¿Golpeó algo o se fue al vacío?
+
+        #Criterio de Obstáculos:
+        #-hit_z > 0.3: Se ignora el suelo (z = 0) y aceras o veredas muy bajas (< 30cm).
+        #-is_valid: Indica que golpeo algo (geometría).
+        #No se limita la altura máxima para detectar correctamente techos de edificios altos (u otros obstáculos altos).
+        is_obstacle = (hit_z > 0.3) & is_valid
+
+        #Transferencia de datos: De DrJit a NumPy
+        #Se convierte la máscara de DrJit a un array de NumPy
+        obstacle_mask_np = np.array(is_obstacle, dtype=bool)
+
+        #Se aplica la máscara para seleccionar solo las coordenadas X,Y que corresponden a obstáculos
+        obs_x = flat_x[obstacle_mask_np]
+        obs_y = flat_y[obstacle_mask_np]
+
+        #Se apilan en formato (N, 2) para API Socialforce
+        sfm_points = np.stack([obs_x, obs_y], axis=1)
+
+        print(f"[SionnaRT Slicer] Escaneo completado. {len(sfm_points)} puntos de obstáculo detectados.")
+
+        #Como la API Socialforce espera una lista de arrays (PedSpacePotential).
+        #Se le devuelve una lista con un solo gran array de puntos.
+        if len(sfm_points) > 0:
+            return [sfm_points]
+        else:
+            return []

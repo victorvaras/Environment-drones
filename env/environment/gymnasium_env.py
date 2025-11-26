@@ -50,68 +50,16 @@ class DroneEnv(gym.Env):
         self.step_count = 0
         self.run_metrics = run_metrics
 
-        # --- Iniciando receptores ---
+        # --- 1. Gestor de receptores ---
+        #Se crean los objetos 'Receptor' sin física aún, solo sus datos.
         self.receptores = ReceptoresManager([Receptor(*p) for p in rx_positions])
-
-        # --- Guardar número de receptores ---
         numero_receptores = self.receptores.n
+
+        #Se inicializan las velocidades en 0 para el cálculo de Doppler
         rx_velocities_mps = [(0.0, 0.0, 0.0) for _ in range(numero_receptores)]
 
-        #Configuración Social Force Model (SFM) - (Dinámica Peatonal)
-        #Se define el "Paso de tiempo" de la física (0.1 s = 10 actualizaciones por segundo)
-        dt = 0.1
-
-        #Definición del Potencial de Interacción (Agente-Agente)
-        #Esto es lo que controla cómo se evitan los peatones entre sí.
-        #-v0: Magnitud de la fuerza de repulsión.
-        #-sigma: Rango o alcance de la fuerza (qué tan lejos se "sienten").
-        ped_ped_potential = potentials.PedPedPotential2D(
-            v0=5.0,  #Fuerza de repulsión
-            sigma=1.0,  #Alcance de la fuerza
-            asymmetry=0.3  #Factor para "preferir" un lado (esquive)
-        )
-        ped_ped_potential.delta_t_step = dt #Se sincroniza el 'dt' para el potencial
-
-        #Inicialización del Simulador
-        #-oversampling = 1': Sincroniza la física del SFM 1:1 con el paso de Gym.
-        #-field_of_view = -1': Permite que el Campo de visión sea de 360°.
-        self.sfm_sim = socialforce.Simulator(
-            delta_t=dt,
-            ped_ped=ped_ped_potential,
-            oversampling=1,
-            field_of_view =-1
-        )
-
-        #Construcción del "Tensor de Estado" (State Tensor)
-        #El SFM de la librería socialforce requiere una matriz específica de 10 columnas por agente.
-        #Formato: [x, y, vx, vy, ax, ay, gx, gy, tau, v_pref]
-        np_initial_states = np.array(rx_positions) #Posiciones iniciales
-        np_goal_states = np.array(rx_goals) #Metas (Goals)
-
-        #Se extraen solo las coordenadas X e Y (2D) porque SFM trabaja asi en el plano
-        self.sfm_goals_2d = np_goal_states[:, :2]
-
-        #Variables auxiliares para rellenar la matriz o tensor de estado
-        #Tensor de estado = (x, y, vx, vy, ax, ay, gx, gy, tau, v_pref)
-        initial_velocities_np = np.zeros((numero_receptores, 2))    #vx, vy (velocidades iniciales)
-        initial_accelerations_np = np.zeros((numero_receptores, 2)) #ax, ay (aceleraciones iniciales)
-        initial_taus_np = np.full((numero_receptores, 1), 0.5) #tau (tiempo de reacción)
-        preferred_speeds_np = np.full((numero_receptores, 1), 1.3) #v_pref (velocidad deseada = 1.3 m/s)
-
-        #Se junta en una sola matriz gigante (NumPy)
-        initial_state_np = np.hstack([
-            np_initial_states[:, :2],   #Columna 0-1: Posición (x, y)
-            initial_velocities_np,      #Columna 2-3: Velocidad (vx, vy)
-            initial_accelerations_np,   #Columna 4-5: Aceleración (ax, ay)
-            self.sfm_goals_2d,          #Columna 6-7: Meta (Goal) (gx, gy)
-            initial_taus_np,            #Columna 8  : Tau
-            preferred_speeds_np         #Columna 9  : Velocidad Preferida (v_pref)
-        ])
-
-        #Se convierte a Tensor de PyTorch (formato requerido para la librería socialforce)
-        self.sfm_current_state = torch.tensor(initial_state_np, dtype=torch.float32)
-
-        # --- Iniciando Sionna RT ---
+        # --- 2. SIONNA RT ---
+        #Se cargar la escena antes de configurar la física para saber dónde están los obstáculos.
         self.rt = SionnaRT(
             antenna_mode=antenna_mode,
             frequency_mhz=frequency_mhz,
@@ -122,25 +70,103 @@ class DroneEnv(gym.Env):
             rx_velocities_mps=rx_velocities_mps,
         )
 
-        # --- Construir escena y colocar receptores ---
+        #Se construye la escena y se colocan los receptores
         self.rt.build_scene()
         self.rt.attach_receivers(self.receptores.positions_xyz())
 
-         
+        # --- 3. PUENTE DE DATOS: EXTRACCIÓN DE OBSTÁCULOS (SLICER) ---
+        #Se extrae la geometría estática de Sionna una sola vez.
+        #Se utiliza la función 'get_sfm_obstacles'.
+        print(f"[Gym] Extrayendo obstáculos de la escena '{scene_name}'...")
+
+        #Se utiliza el escaner para obtener los obstáculos para la API Socialforce
+        #grid_density = 0.4 define la resolución del escáner (40cm).
+        obstacles_np = self.rt.get_sfm_obstacles(grid_density=0.4)
+
+        #Se convierte la lista de Numpy a lista de Tensores PyTorch
+        #Requisito de socialforce para cálculo vectorizado
+        obstacles_torch = [torch.tensor(o, dtype=torch.float32) for o in obstacles_np]
+        print(f"[Gym] Se encontraron {len(obstacles_torch)} estructuras de obstáculos.")
+
+        # --- 4. CONFIGURACIÓN MOTOR DE NAVEGACIÓN Socialforce - SFM ---
+        dt = 0.1 #Paso de tiempo físico (100ms)
+
+        #Potencial Agente-Agente (PedPed)
+        #Define la fuerza de repulsión entre peatones para evitar choques entre ellos.
+        ped_ped_potential = potentials.PedPedPotential2D(
+            v0=5.0,       #Fuerza de repulsión entre receptores
+            sigma=0.5,    #Alcance de la fuerza
+            asymmetry=0.3 #Factor de asimetria para esquive vertical entre receptores
+        )
+        ped_ped_potential.delta_t_step = dt
+
+        #Potencial Agente-Obstáculo (PedSpace)
+        ped_space_potential = potentials.PedSpacePotential(
+            obstacles_torch,  #Se inyecta el mapa de obstáculos extraído de Sionna.
+            u0=80.0,  #Magnitud de la fuerza repulsiva del muro u obstáculo
+            r=1.0     #Radio de influencia (distancia a la que el muro empieza a "empujar")
+        )
+
+        #Inicialización del Simulador SFM
+        #Este gestionará el movimiento autónomo de los peatones.
+        self.sfm_sim = socialforce.Simulator(
+            delta_t=dt,                     #Paso de tiempo dentro del simulador SFM
+            ped_ped=ped_ped_potential,      #Potencial Agente-Agente (PedPed)
+            ped_space=ped_space_potential,  #Potencial Agente-Obstáculo (PedSpace)
+            oversampling=1,                 #Sincroniza la física del SFM 1:1 con el paso de Gym.
+            field_of_view=-1                #Permite que el Campo de visión sea de 360° (APF para cada receptor).
+        )
+
+        #Referencia Externa para el Script
+        #Se guarda una referencia al potencial del PedSpace para visualización/debug
+        self.sfm_sim.ped_space = ped_space_potential
+
+        # --- 5. Construcción del Tensor de Estado Inicial (State Tensor o Tensor de estado) ---
+        #Formato requerido por SFM: [x, y, vx, vy, ax, ay, gx, gy, tau, v_pref]
+        np_initial_states = np.array(rx_positions)  #Posiciones iniciales
+        np_goal_states = np.array(rx_goals)         #Metas (Goals)
+
+        #Se guardan las metas 2D para la lógica de control
+        self.sfm_goals_2d = np_goal_states[:, :2]
+
+        #Inicialización de variables
+        initial_velocities_np = np.zeros((numero_receptores, 2))                    #Velocidades iniciales (vx, vy)
+        initial_accelerations_np = np.zeros((numero_receptores, 2))                 #Aceleraciones iniciales (ax, ay)
+        initial_taus_np = np.full((numero_receptores, 1), 0.5)       #Tiempo de reacción (tau)
+        preferred_speeds_np = np.full((numero_receptores, 1), 1.3)   #Velocidad deseada (v_pref = 1.3 m/s)
+
+        #Se ensambla el Tensor de Estado
+        initial_state_np = np.hstack([
+            np_initial_states[:, :2],   #Columna 0-1: Posición (x, y)
+            initial_velocities_np,      #Columna 2-3: Velocidad (vx, vy)
+            initial_accelerations_np,   #Columna 4-5: Aceleración (ax, ay)
+            self.sfm_goals_2d,          #Columna 6-7: Metas (Goals) (gx, gy)
+            initial_taus_np,            #Columna 8  : Tau
+            preferred_speeds_np         #Columna 9  : Velocidad Preferida (v_pref)
+        ])
+
+        #Se convierte a Tensor de PyTorch (formato requerido para la librería socialforce)
+        self.sfm_current_state = torch.tensor(initial_state_np, dtype=torch.float32)
+
+        # --- 6. Configuración Final del Entorno (Bounds, Spaces, Rendering) ---
+        #Se definen los límites del espacio de acción y observación para RL
         bounds_min = self.rt.scene_bounds[0]
         bounds_max = self.rt.scene_bounds[1]
         bounds = ((bounds_min[0], bounds_max[0]), (bounds_min[1], bounds_max[1]), (bounds_min[2], bounds_max[2]))
         self.scene_bounds = bounds
 
-        # Dron / spaces
+        #Inicialización del Dron
         self.dron = Dron(start_xyz=self._start, bounds=bounds)
+        self.rt.move_tx(self.dron.pos)  #Sincronización inicial física-lógica
+
+        #Espacios de Gymnasium (Acción y Observación)
         self.action_space = spaces.Box(low=-5.0, high=5.0, shape=(3,), dtype=np.float32)
         self.observation_space = spaces.Box(
             low=-1e9, high=1e9, shape=(3 + self.receptores.n,), dtype=np.float32
         )
         self.dron.bounds = bounds
 
-        # Estado de render
+        #Estado de renderizado
         self._fig = None
         self._ax = None
         self._canvas = None
@@ -151,24 +177,28 @@ class DroneEnv(gym.Env):
         self._sc_drone = None
         self._cbar = None
         self._name_texts = []
-
-        # Acumuladores por-UE para la tabla (id -> dict)
         self._acc = None
         self._last_ue_metrics = None
 
-        # ================= Gym API =================
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
+        #Reinicia el entorno a su estado inicial para un nuevo episodio.
         super().reset(seed=seed)
         self.step_count = 0
 
+        #Reinicio del Dron
         self.dron = Dron(start_xyz=self._start, bounds=self.scene_bounds)
+
+        #Sincronización con Sionna
+        #Se mueve el transmisor a la posición inicial para que el cálculo sea correcto desde t=0
         self.rt.move_tx(self.dron.pos)
 
+        #Generación de la primera observación
         obs = np.concatenate([self.dron.pos]).astype(np.float32)
         info = {}
 
-        # ---- estado de render ----
+        #Limpieza de estado de renderizado
+        #Se borran las referencias gráficas para evitar superposiciones en nuevos episodios
         self._fig = None
         self._ax_map = None
         self._ax_list = None
@@ -183,7 +213,7 @@ class DroneEnv(gym.Env):
 
         self._last_ue_metrics = []
 
-        # 1) Número de UEs (receptores)
+        #Verificación auxiliar del número de usuarios
         try:
             self.num_ut = int(self.receptores.positions_xyz().shape[0])
         except Exception:
@@ -195,32 +225,84 @@ class DroneEnv(gym.Env):
         return obs, info
 
     def step(self, action: np.ndarray):
+        #Ejecuta un paso de simulación (t -> t+dt)
+        """
+        Para el movimiento de los receptores o personas se implemento una
+        arquitectura de navegación híbrida:
+        1. Planificación Local (SFM): Cálculo de fuerzas sociales base.
+        2. Control Reactivo (Python): Corrección de mínimos locales y estancamiento.
+        """
         self.step_count += 1
 
         # Movimiento del dron
         self.dron.step_delta(action)
         self.rt.move_tx(self.dron.pos)
 
-        #---Movimiento de personas / receptores (Rx's)---
-        #Social Force Model (SFM)
-        #Se calcula la "intención social", el agente o receptor quiere ir a la meta
-        #mientras esquiva a otros agentes (fuerza repulsiva peatonal).
+        #---Movimiento de personas / receptores (Rx's) - Social Force Model (SFM)---
+        #Se consulta a la librería socialforce el siguiente estado deseado.
+        #Se considera: Atracción a la meta + Repulsión entre agentes + Repulsión de obstáculos.
         proposed_state = self.sfm_sim(self.sfm_current_state) #Se obtiene el "estado propuesto" por el SFM
         proposed_state_np = proposed_state.detach().numpy()   #Se convierte la respuesta de Torch a NumPy
 
-        #Se extrae la velocidad deseada por el SFM (Vx, Vy)
+        #Se extrae solo el vector velocidad propuesto (Vx, Vy)
         proposed_vel_2d = proposed_state_np[:, 2:4]
 
-        #Integración de Euler (Cálculo de nueva posición)
-        #Posición Nueva = Posición Actual + Velocidad Final * dt
-        dt = 0.1
+        # ------------------------------------------------------------
+        # Control Reactivo: Evasión de Mínimos Locales
+        # ------------------------------------------------------------
+        #Problema: El modelo SFM puede caer en equilibrios estables (velocidad ~0) frente a muros planos.
+        #Solución: Se detecta el estancamiento y se aplica una fuerza de escape tangencial.
         current_pos_2d = self.sfm_current_state.numpy()[:, 0:2]
+
+        for i in range(self.receptores.n):
+            #Análisis del Estado Cinético (Velocidad actual)
+            vel_magnitude = np.linalg.norm(proposed_vel_2d[i])
+
+            #Análisis Geométrico (Vector a la Meta)
+            goal_pos = self.sfm_goals_2d[i]
+            to_goal_vec = goal_pos - current_pos_2d[i]
+            dist_to_goal = np.linalg.norm(to_goal_vec)
+
+            #Se normaliza el vector dirección
+            if dist_to_goal > 1e-3:
+                to_goal_dir = to_goal_vec / dist_to_goal
+            else:
+                to_goal_dir = np.array([0.0, 0.0])
+
+            #Algoritmo de Detección de Estancamiento (Stuck Detection)
+            #Criterio: Si el agente está lejos de su meta (>1.0m) pero su velocidad es casi nula (<0.2),
+            #se asume que está bloqueado por un equilibrio de fuerzas.
+            if dist_to_goal > 1.0 and vel_magnitude < 0.2:
+                #Maniobra de Recuperación (Tangential Escape)
+                #Se calcula un vector perpendicular a la meta (-y, x) para generar deslizamiento lateral.
+                #De tal manera que se rompe la simetría y fuerza al agente a rodear el obstáculo (Wall Sliding).
+                #Vector base perpendicular (90 grados respecto a la meta)
+                tangent_force = np.array([-to_goal_dir[1], to_goal_dir[0]])
+
+                #Determinismo por ID del receptor
+                #Se usa el índice 'i' del agente.
+                #Esto garantiza que el agente nunca cambie de opinión a mitad de camino.
+                #Si i es par -> Gira a un lado. Si es impar -> Gira al otro.
+                if i % 2 == 0:
+                    tangent_force = -tangent_force
+
+                #Inyección de Fuerza
+                #Se usa 8.0 para que la fuerza de escape sea comparable a la del muro (en este caso u0 = 80).
+                #asegurando un deslizamiento rápido y visible.
+                proposed_vel_2d[i] += tangent_force * 8.0
+                # ============================================================
+
+        #Integración de Euler (Cálculo de nueva posición)
+        #Se calcula la posición candidata: Posición Nueva = Posición Actual + Velocidad Final * dt
+        dt = 0.1
         final_proposed_pos_2d = current_pos_2d + proposed_vel_2d * dt
 
         #Validación física y actualización
         #Se prepara el nuevo array de estado validado y actualización
         current_positions_3d = np.array([rx.position for rx in self.rt.rx_list])
         new_validated_state_np = self.sfm_current_state.numpy().copy()
+        #Esto ayuda evita el atravesar muros debido a pasos de tiempo discretos.
+        #Se consulta si el movimiento es válido
 
         for i, rx in enumerate(self.rt.rx_list):
             #Limpieza de tipos de datos (Data Hygiene)
