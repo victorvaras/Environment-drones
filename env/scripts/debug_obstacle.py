@@ -4,9 +4,7 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
-# --- CORRECCIÓN DE RUTA ---
-# Usamos parents[2] para subir hasta 'Environment-drones'
-# (igual que en run_sfm_test_v2.py)
+# --- Configuración de rutas para los archivos---
 project_root = Path(__file__).resolve().parents[2]
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
@@ -15,54 +13,78 @@ from env.environment.sionnaEnv import SionnaRT
 
 
 def debug_scene_obstacles_slicer():
-    # --- CONFIGURACIÓN ---
-    SCENE_NAME = "simple_street_canyon_with_cars"
 
-    RUN_TAG = datetime.now().strftime("%Y%m%d-%H%M%S")
+    #1.-Carga de escena
+    SCENE_NAME = "munich"
 
-    # Ahora guardamos en 'Pruebas SFM Slicer' (en la raíz del proyecto)
-    # Le añadimos el prefijo DEBUG a la carpeta para diferenciarla de las corridas completas
-    OUT_DIR = project_root / "Pruebas SFM Slicer" / f"DEBUG_{SCENE_NAME}_{RUN_TAG}"
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"--- Depurando obstáculos (Auto-Scale) EN {SCENE_NAME} ---")
 
-    print(f"--- DEPURANDO OBSTÁCULOS (MÉTODO SLICER) EN {SCENE_NAME} ---")
-    print(f"[INFO] Carpeta de salida: {OUT_DIR}")
-
-    # 1. Cargar escena
+    #Cargar motor de Sionna
     rt = SionnaRT(scene_name=SCENE_NAME)
     rt.build_scene()
 
-    # 2. Usar el nuevo método "Slicer"
-    obstacles_list = rt.get_sfm_obstacles(grid_density=0.3)
+    #2.-Cálculo automático de densidad
+    #Se obtienen las dimensiones reales del mapa
+    bounds = rt.mi_scene.bbox()
+    extent_x = bounds.max.x - bounds.min.x
+    extent_y = bounds.max.y - bounds.min.y
+    max_dimension = max(extent_x, extent_y)
+
+    print(f"[INFO] Dimensiones de la escena: {extent_x:.1f}m x {extent_y:.1f}m")
+
+    #Lógica de Auto-Escalado (Auto-Scale)
+    #Si el mapa es gigante (>500m), se usa menos resolución para no explotar la memoria.
+    #Si es pequeño, se usa alta precisión.
+    if max_dimension > 1000.0:
+        auto_density = 1.5  #Muy grande
+    elif max_dimension > 500.0:
+        auto_density = 0.8  #Mediano-Grande
+    else:
+        auto_density = 0.3  #Pequeño/Estándar
+
+    print(f"[INFO] Densidad calculada automáticamente: {auto_density}m")
+
+    #3.-Ejecución del Slicer
+    obstacles_list = rt.get_sfm_obstacles(grid_density=auto_density)
 
     if not obstacles_list:
         print("No se detectaron obstáculos.")
         return
 
-    # obstacles_list es [ array(N, 2) ]
     all_points = obstacles_list[0]
     print(f"Se generó una nube de {len(all_points)} puntos.")
 
-    # 3. Graficar (Scatter Plot)
-    fig, ax = plt.subplots(figsize=(12, 10))
+    #4.-Graficación Dinámica
+    #Se configuran las carpetas
+    RUN_TAG = datetime.now().strftime("%Y%m%d-%H%M%S")
+    OUT_DIR = project_root / "Pruebas SFM Slicer" / f"DEBUG_{SCENE_NAME}_{RUN_TAG}"
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Dibujar los puntos como un mapa de "muros"
-    ax.scatter(all_points[:, 0], all_points[:, 1], s=1, c='black', marker='.', label='Obstáculos (Z=0.3m a 2.5m)')
+    fig, ax = plt.subplots(figsize=(12, 12))
 
-    ax.set_xlim(-80, 80)
-    ax.set_ylim(-60, 60)
+    #Se ajusta el tamaño del punto según la cantidad para que no se vea una mancha
+    #A más puntos, menor el tamaño de estos
+    marker_size = 10000 / len(all_points)
+    marker_size = max(0.1, min(marker_size, 2.0))  #Limitar entre 0.1 y 2.0
+
+    ax.scatter(all_points[:, 0], all_points[:, 1], s=marker_size, c='black', marker='.', label='Obstáculos')
+
+    #Se usan los límites reales de la escena con un pequeño margen del 5%
+    margin_x = extent_x * 0.05
+    margin_y = extent_y * 0.05
+
+    ax.set_xlim(bounds.min.x - margin_x, bounds.max.x + margin_x)
+    ax.set_ylim(bounds.min.y - margin_y, bounds.max.y + margin_y)
+
     ax.grid(True, alpha=0.3)
     ax.set_aspect('equal')
     ax.set_xlabel("X [m]")
     ax.set_ylabel("Y [m]")
-    ax.set_title(f"Escaneo de Obstáculos: {SCENE_NAME}\n(Lo que la API SocialForce 'sentirá')")
-    ax.legend()
+    ax.set_title(f"Escaneo: {SCENE_NAME}\nDimensión: {max_dimension:.0f}m | Resolución: {auto_density}m")
 
-    # Guardar imagen
     output_img = OUT_DIR / "debug_slicer_output.png"
     plt.savefig(output_img, dpi=150)
-    print(f"Imagen de depuración guardada en: {output_img}")
-
+    print(f"Imagen guardada en: {output_img}")
     plt.close(fig)
 
 

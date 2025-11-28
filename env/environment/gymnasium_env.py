@@ -79,9 +79,24 @@ class DroneEnv(gym.Env):
         #Se utiliza la función 'get_sfm_obstacles'.
         print(f"[Gym] Extrayendo obstáculos de la escena '{scene_name}'...")
 
-        #Se utiliza el escaner para obtener los obstáculos para la API Socialforce
-        #grid_density = 0.4 define la resolución del escáner (40cm).
-        obstacles_np = self.rt.get_sfm_obstacles(grid_density=0.4)
+        # --- LÓGICA DE AUTO-ESCALADO (AUTO-SCALE) ---
+        #Se calcula el tamaño del mapa para decidir la densidad y proteger la RAM.
+        bounds = self.rt.mi_scene.bbox()
+        extent = max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y)
+
+        if extent > 1000.0:
+            gym_density = 1.5  #Escena Grande -> Menos resolución
+            print(f"[Gym] Escena Gigante ({extent:.0f}m). Ajustando densidad a: {gym_density}m")
+        elif extent > 500.0:
+            gym_density = 0.8  #Escena mediana
+            print(f"[Gym] Escena Grande ({extent:.0f}m). Ajustando densidad a: {gym_density}m")
+        else:
+            gym_density = 0.4  #Escena pequeña -> Alta precisión
+            print(f"[Gym] Escena Estándar ({extent:.0f}m). Usando alta precisión: {gym_density}m")
+
+        #Se utiliza el escaner para obtener los obstáculos para la API Socialforce (Slicer)
+        #grid_density = densidad calculada dinámicamente
+        obstacles_np = self.rt.get_sfm_obstacles(grid_density=gym_density)
 
         #Se convierte la lista de Numpy a lista de Tensores PyTorch
         #Requisito de socialforce para cálculo vectorizado
