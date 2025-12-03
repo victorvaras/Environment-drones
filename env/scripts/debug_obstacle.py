@@ -57,7 +57,7 @@ def debug_scene_obstacles_slicer():
     #4.-Graficación Dinámica
     #Se configuran las carpetas
     RUN_TAG = datetime.now().strftime("%Y%m%d-%H%M%S")
-    OUT_DIR = project_root / "Pruebas SFM Slicer" / f"DEBUG_{SCENE_NAME}_{RUN_TAG}"
+    OUT_DIR = project_root / "Pruebas SFM Slicer" / f"DEBUG_{RUN_TAG}_{SCENE_NAME}"
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(12, 12))
@@ -82,7 +82,7 @@ def debug_scene_obstacles_slicer():
     ax.set_ylabel("Y [m]")
     ax.set_title(f"Escaneo: {SCENE_NAME}\nDimensión: {max_dimension:.0f}m | Resolución: {auto_density}m")
 
-    output_img = OUT_DIR / "debug_slicer_output.png"
+    output_img = OUT_DIR / f"debug_slicer_{SCENE_NAME}.png"
     plt.savefig(output_img, dpi=150)
     print(f"Imagen guardada en: {output_img}")
     plt.close(fig)

@@ -14,6 +14,7 @@ os.environ["MPLBACKEND"] = "Agg"
 matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
+from matplotlib.lines import Line2D
 
 # === Bootstrap sys.path ===
 project_root = Path(__file__).resolve().parents[2]
@@ -25,59 +26,21 @@ from env.environment.gymnasium_env import DroneEnv
 # ========= Configuración =========
 SCENE = "simple_street_canyon_with_cars"
 DRONE_START = (0.0, 0.0, 10.0)
-MAX_STEPS = 300
+MAX_STEPS = 1000
 FREQS_MHZ = [3500.0]
 
-# Posiciones desafiantes (Tienen que esquivar el obstáculo central)
-RX_POSITIONS = [
-    #Prueba original con 3 receptores
-    #(20.0, -30.0, 1.5),
-    #(50.0,    0.0, 1.5),
-    #(-90, -55, 1.5),
+#Posiciones iniciales
+RX_POSITIONS = None
 
-    #Prueba de Colisión entre 2 receptores (sin colisión)
-    #(-40.0, 0.0, 1.5),  #UE0
-    #(-20.0, 0.0, 1.5),  #UE1
+#Metas de los receptores
+RX_GOALS = None
 
-    #Prueba de Colisión entre 7 receptores (sin colisión)
-    #Grupo 1 (4 agentes) - Empiezan a la izquierda
-    (-40.0, 1.0, 1.5),  #UE0
-    (-40.0, -1.0, 1.5), #UE1
-    (-38.0, 0.5, 1.5),  #UE2
-    (-38.0, -0.5, 1.5), #UE3
-
-    # Grupo 2 (3 agentes) - Empiezan a la derecha
-    (-10.0, 0.0, 1.5),  #UE4
-    (-10.0, 1.0, 1.5),  #UE5
-    (-10.0, -1.0, 1.5), #UE6
-]
-
-RX_GOALS = [
-    #Prueba original con 3 receptores
-    #(80.0, -30.0, 1.5),  # Meta UE0 (20.0, -30.0, 1.5)
-    #(-80.0, 0.0, 1.5),   # Meta UE1 (50.0,   0.0, 1.5)
-    #(80.0, -55.0, 1.5),  # Meta UE2 (-90,    -55, 1.5)
-
-    #Prueba de Colisión entre 2 receptores
-    #(-10.0, 0.0, 1.5),   # UE0 quiere ir a la derecha
-    #(-50.0, 0.0, 1.5),  # UE1 quiere ir a la izquierda
-
-    #Prueba de Colisión entre 7 receptores (sin colisión)
-    #Metas Grupo 1
-    (-10.0, 1.0, 1.5),   # UE0
-    (-10.0, -1.0, 1.5),  # UE1
-    (-12.0, 0.5, 1.5),   # UE2
-    (-12.0, -0.5, 1.5),  # UE3
-
-    #Metas Grupo 2
-    (-40.0, 0.0, 1.5),   # UE4
-    (-40.0, 1.0, 1.5),   # UE5
-    (-40.0, -1.0, 1.5),  # UE6
-]
+#Cantidad de agentes a generar aleatoriamente
+NUM_AGENTS = 10
 
 # Carpeta de salida
 RUN_TAG = datetime.now().strftime("%Y%m%d-%H%M%S")
-OUT_DIR = Path(project_root) / "Pruebas SFM Slicer" / f"SFM_{RUN_TAG}"
+OUT_DIR = Path(project_root) / "Pruebas SFM Slicer" / f"SFM_{RUN_TAG}_{SCENE}_{MAX_STEPS} steps"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -120,26 +83,13 @@ def _get_rx_positions_xyz(rt):
 
 
 # === 1. PLOT ESTÁTICO (FINAL: Con etiquetas de texto) ===
-def plot_trajectories_xy_xz(tracks, obstacles, out_path, title_prefix="Trayectorias"):
+def plot_trajectories_xy_xz(tracks, obstacles, scene_bounds, out_path, freq_mhz, num_agents):
     drone = tracks["drone"]
     ues = tracks["ues"]
+    T = ues.shape[0]
     N = ues.shape[1]
     rx_labels = [f"UE{i}" for i in range(N)]
 
-    # 1. Calcular límites globales para XY
-    all_xy = np.vstack([drone[:, :2], ues[:, :, :2].reshape(-1, 2)])
-    if obstacles:
-        try:
-            obs_stack = np.vstack(obstacles)
-            all_xy = np.vstack([all_xy, obs_stack])
-        except:
-            pass
-
-    pad = 5.0
-    xmin, xmax = np.nanmin(all_xy[:, 0]) - pad, np.nanmax(all_xy[:, 0]) + pad
-    ymin, ymax = np.nanmin(all_xy[:, 1]) - pad, np.nanmax(all_xy[:, 1]) + pad
-
-    # 2. Configuración de Figura
     fig = plt.figure(figsize=(16, 12))
     gs = GridSpec(2, 1, height_ratios=[3, 1.2], figure=fig)
     fig.subplots_adjust(left=0.08, right=0.82, top=0.92, bottom=0.08, hspace=0.35)
@@ -148,18 +98,40 @@ def plot_trajectories_xy_xz(tracks, obstacles, out_path, title_prefix="Trayector
     ax_xz = fig.add_subplot(gs[1, 0])
 
     # --- PLANTA (XY) ---
-    ax_xy.set_title(f"{title_prefix} — Planta (XY)", pad=12, fontsize=14, weight='bold')
+    ax_xy.set_title(f"SFM Slicer {freq_mhz:.0f} MHz - {num_agents} Agentes ({T} pasos) — Planta (XY)",
+                    pad=12, fontsize=14, weight='bold')
     ax_xy.set_xlabel("X [m]", fontsize=12)
     ax_xy.set_ylabel("Y [m]", fontsize=12)
     ax_xy.set_aspect("equal", adjustable='datalim')
-    ax_xy.set_xlim([xmin, xmax])
-    ax_xy.set_ylim([ymin, ymax])
+
+    # LÍMITES
+    if scene_bounds:
+        (xmin, xmax) = scene_bounds[0]
+        (ymin, ymax) = scene_bounds[1]
+        extent_x = xmax - xmin
+        extent_y = ymax - ymin
+        margin_x = extent_x * 0.05
+        margin_y = extent_y * 0.05
+        ax_xy.set_xlim(xmin - margin_x, xmax + margin_x)
+        ax_xy.set_ylim(ymin - margin_y, ymax + margin_y)
+    else:
+        all_xy = np.vstack([drone[:, :2], ues[:, :, :2].reshape(-1, 2)])
+        pad = 10
+        ax_xy.set_xlim(np.min(all_xy[:, 0]) - pad, np.max(all_xy[:, 0]) + pad)
+        ax_xy.set_ylim(np.min(all_xy[:, 1]) - pad, np.max(all_xy[:, 1]) + pad)
+
     ax_xy.grid(True, ls="--", alpha=0.35)
 
-    # Obstáculos XY
+    # --- OBSTÁCULOS (CAMBIO: MÁS OSCUROS) ---
     if obstacles:
-        for obs in obstacles:
-            ax_xy.scatter(obs[:, 0], obs[:, 1], s=4, c='#404040', marker='s', alpha=0.3, linewidths=0)
+        obs_stack = np.vstack(obstacles)
+        n_points = len(obs_stack)
+        if n_points > 0:
+            marker_size = 10000.0 / n_points
+            marker_size = max(0.1, min(marker_size, 2.0))
+
+            ax_xy.scatter(obs_stack[:, 0], obs_stack[:, 1],
+                       s=marker_size, c='black', marker='.', alpha=1.0)
 
     # Dron XY
     ax_xy.plot(drone[:, 0], drone[:, 1], lw=3.0, label="Drone", zorder=2.5, color='tab:blue')
@@ -169,115 +141,135 @@ def plot_trajectories_xy_xz(tracks, obstacles, out_path, title_prefix="Trayector
     # UEs XY
     colors = matplotlib.colormaps['tab10']
     for i in range(N):
-        c = colors(i)
+        c = colors(i % 10)
         traj = ues[:, i, :]
-
-        # Trayectoria
         ax_xy.plot(traj[:, 0], traj[:, 1], lw=3, color=c, label=rx_labels[i], zorder=2.2, alpha=0.9)
-
-        # Inicio (Círculo)
         ax_xy.scatter(traj[0, 0], traj[0, 1], s=120, marker="o", color=c, zorder=2.8, edgecolors='white')
-
-        # Fin (Cuadrado)
         ax_xy.scatter(traj[-1, 0], traj[-1, 1], s=120, marker="s", color=c, zorder=2.8, edgecolors='white')
 
-        # --- AQUÍ ESTÁ EL CAMBIO: ETIQUETAS DE TEXTO ---
-        # Ponemos el nombre del UE un poco arriba y a la derecha de su punto de inicio
-        ax_xy.text(traj[0, 0] + 1.5, traj[0, 1] + 1.5, rx_labels[i],
-                   fontsize=11, weight="bold", color=c, zorder=5)
+        if N <= 20:
+            ax_xy.text(traj[0, 0] + 1.5, traj[0, 1] + 1.5, rx_labels[i], fontsize=11, weight="bold", color=c, zorder=5)
 
-    # --- PERFIL (XZ) ---
+    # --- PERFIL (XZ) (CAMBIO: INICIO CÍRCULO / FIN CUADRADO) ---
     ax_xz.set_title("Perfil XZ (Elevación)", pad=10, fontsize=14, weight='bold')
     ax_xz.set_xlabel("X [m]", fontsize=12)
     ax_xz.set_ylabel("Z [m]", fontsize=12)
     ax_xz.grid(True, ls="--", alpha=0.35)
 
-    ax_xz.set_xlim([xmin, xmax])
+    ax_xz.set_xlim(ax_xy.get_xlim())
     ax_xz.set_ylim(0, 18)
     ax_xz.set_aspect('auto')
 
-    # Dron XZ
+    # Dron
     ax_xz.plot(drone[:, 0], drone[:, 2], lw=3.0, label="Drone", color='tab:blue')
     ax_xz.scatter(drone[0, 0], drone[0, 2], s=100, marker="^", color='tab:blue', edgecolors='k')
 
-    # UEs XZ
+    # UEs
     for i in range(N):
-        ax_xz.plot(ues[:, i, 0], ues[:, i, 2], lw=2.5, color=colors(i), label=rx_labels[i], alpha=0.8)
-        ax_xz.scatter(ues[0, i, 0], ues[0, i, 2], s=80, marker="o", color=colors(i), edgecolors='white')
+        c = colors(i % 10)
+        # Trayectoria
+        ax_xz.plot(ues[:, i, 0], ues[:, i, 2], lw=2.5, color=c, label=rx_labels[i], alpha=0.8)
+        # Inicio (Círculo)
+        ax_xz.scatter(ues[0, i, 0], ues[0, i, 2], s=80, marker="o", color=c, edgecolors='white', zorder=3)
+        # Fin (Cuadrado)
+        ax_xz.scatter(ues[-1, i, 0], ues[-1, i, 2], s=80, marker="s", color=c, edgecolors='white', zorder=3)
 
-    # --- LEYENDA UNIFICADA A LA DERECHA ---
+    # Leyenda
+    obst_proxy = Line2D([0], [0], marker='o', color='w', label='Obstáculos', markerfacecolor='#202020', markersize=8,
+                        alpha=0.6)
     handles_xy, labels_xy = ax_xy.get_legend_handles_labels()
     unique_labels = dict(zip(labels_xy, handles_xy))
 
-    from matplotlib.lines import Line2D
-    obst_proxy = Line2D([0], [0], marker='s', color='w', label='Obstáculos',
-                        markerfacecolor='#404040', markersize=10, alpha=0.5)
+    if N > 15:
+        final_handles = [unique_labels['Drone']] + [obst_proxy]
+        final_labels = ['Drone', 'Obstáculos']
+    else:
+        final_handles = [unique_labels['Drone']] + [unique_labels[l] for l in rx_labels if l in unique_labels] + [
+            obst_proxy]
+        final_labels = ['Drone'] + [l for l in rx_labels if l in unique_labels] + ['Obstáculos']
 
-    final_handles = [unique_labels['Drone']] + [unique_labels[l] for l in rx_labels if l in unique_labels] + [
-        obst_proxy]
-    final_labels = ['Drone'] + [l for l in rx_labels if l in unique_labels] + ['Obstáculos']
-
-    fig.legend(final_handles, final_labels,
-               loc="center left", bbox_to_anchor=(0.83, 0.5),
-               title="Leyenda", title_fontsize=12, fontsize=11,
-               frameon=True, fancybox=True, shadow=True, borderpad=1)
-
+    fig.legend(final_handles, final_labels, loc="center left", bbox_to_anchor=(0.83, 0.5), title="Leyenda")
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
 
 
 # === 2. GENERADOR DE GIF (CON LEYENDA EXTERNA) ===
-def make_gif(tracks, obstacles, out_path, fps=20):
+def make_gif(tracks, obstacles, scene_bounds, out_path, fps=20):
     ues = tracks["ues"]
     T, N, _ = ues.shape
 
-    # Figura más ancha para la leyenda
-    fig, ax = plt.subplots(figsize=(12, 8))
-    fig.subplots_adjust(right=0.75) # Dejar espacio a la derecha
+    fig, ax = plt.subplots(figsize=(12, 12))
+    fig.subplots_adjust(right=0.80)
 
     ax.set_aspect('equal')
     ax.set_xlabel("X [m]")
     ax.set_ylabel("Y [m]")
-    ax.set_title("Simulación Dinámica (Sionna + SocialForce)")
+    ax.set_title(f"Simulación Dinámica: (Sionna + SocialForce) - {N} Agentes ({T} pasos)")
     ax.grid(True, alpha=0.3)
 
-    # Obstáculos fijos
     if obstacles:
-        for obs in obstacles:
-            ax.scatter(obs[:, 0], obs[:, 1], s=1, c='black', marker='.', alpha=0.2)
+        obs_stack = np.vstack(obstacles)
+        n_points = len(obs_stack)
+        if n_points > 0:
+            marker_size = 10000.0 / n_points
+            marker_size = max(0.1, min(marker_size, 2.0))
 
-    # Límites dinámicos
-    all_xy = ues[:, :, :2].reshape(-1, 2)
-    if obstacles:
-        try:
-            obs_stack = np.vstack(obstacles)
-            all_xy = np.vstack([all_xy, obs_stack])
-        except: pass
-    pad = 5
-    ax.set_xlim(np.min(all_xy[:, 0]) - pad, np.max(all_xy[:, 0]) + pad)
-    ax.set_ylim(np.min(all_xy[:, 1]) - pad, np.max(all_xy[:, 1]) + pad)
+            # Igualamos alpha a 0.6
+            ax.scatter(obs_stack[:, 0], obs_stack[:, 1],
+                       s=marker_size, c='black', marker='.', alpha=1.0)
 
-    # Colores y elementos dinámicos
+    if scene_bounds:
+        (xmin, xmax) = scene_bounds[0]
+        (ymin, ymax) = scene_bounds[1]
+        extent_x = xmax - xmin
+        extent_y = ymax - ymin
+        margin_x = extent_x * 0.05
+        margin_y = extent_y * 0.05
+        ax.set_xlim(xmin - margin_x, xmax + margin_x)
+        ax.set_ylim(ymin - margin_y, ymax + margin_y)
+    else:
+        all_xy = ues[:, :, :2].reshape(-1, 2)
+        pad = 5
+        ax.set_xlim(np.min(all_xy[:, 0]) - pad, np.max(all_xy[:, 0]) + pad)
+        ax.set_ylim(np.min(all_xy[:, 1]) - pad, np.max(all_xy[:, 1]) + pad)
+
     cmap = matplotlib.colormaps['tab10']
-    colors = [cmap(i) for i in range(N)]
-    rx_labels = [f"UE{i}" for i in range(N)]
+    colors = [cmap(i % 10) for i in range(N)]
 
     start_pos = ues[0, :, :2]
-    scats = ax.scatter(start_pos[:, 0], start_pos[:, 1], s=120, c=colors, zorder=5, edgecolors='white')
-    trails = [ax.plot([], [], '-', lw=2, color=colors[i], alpha=0.6, label=rx_labels[i])[0] for i in range(N)]
+    scats = ax.scatter(start_pos[:, 0], start_pos[:, 1], s=100, c=colors, zorder=5, edgecolors='white')
+    trails = [ax.plot([], [], '-', lw=2, color=colors[i], alpha=0.6)[0] for i in range(N)]
 
-    # --- LEYENDA EXTERNA ---
-    ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5), title="Receptores")
+    # Leyenda GIF
+    if N <= 15:
+        custom_lines = [Line2D([0], [0], color=colors[i], lw=2) for i in range(N)]
+        ax.legend(custom_lines, [f"UE{i}" for i in range(N)],
+                  loc='center left', bbox_to_anchor=(1.02, 0.5), title="Receptores")
+    else:
+        ax.legend([scats], [f"{N} Agentes"], loc='center left', bbox_to_anchor=(1.02, 0.5))
 
     def update(frame):
         current_pos = ues[frame, :, :2]
         scats.set_offsets(current_pos)
-        start = max(0, frame - 30) # Trail más largo
+        start = max(0, frame - 30)
         for i, trail in enumerate(trails):
             trail.set_data(ues[start:frame + 1, i, 0], ues[start:frame + 1, i, 1])
         return scats, *trails
 
-    frames_idx = range(0, T, 2)
+    # --- LÓGICA DE SEGURIDAD ADAPTATIVA ---
+    # Si T es pequeño (ej: 300), step_skip será 1 (sin saltos, fluido).
+    # Si T es gigante (ej: 10000), step_skip será alto (ej: 20) para no explotar.
+    TARGET_TOTAL_FRAMES = 500
+
+    if T <= TARGET_TOTAL_FRAMES:
+        step_skip = 1  # Muestra TODOS los cuadros (Perfecto para escena simple)
+    else:
+        step_skip = T // TARGET_TOTAL_FRAMES  # Salta para proteger RAM
+
+    print(f"[GIF] Generando animación con step_skip={step_skip} (Total frames: {T // step_skip})")
+
+    frames_idx = range(0, T, step_skip)
+
     ani = animation.FuncAnimation(fig, update, frames=frames_idx, interval=50, blit=True)
     ani.save(out_path, writer='pillow', fps=fps)
     plt.close(fig)
@@ -287,6 +279,9 @@ def make_gif(tracks, obstacles, out_path, fps=20):
 def run_episode(freq_mhz: float) -> dict:
     print(f"--- Iniciando Episodio {freq_mhz} MHz ---")
 
+    #Obligar al SpawnManager a usar siempre los mismos números para debug
+    np.random.seed(0)
+
     env = DroneEnv(
         render_mode=None,
         scene_name=SCENE,
@@ -294,25 +289,28 @@ def run_episode(freq_mhz: float) -> dict:
         drone_start=DRONE_START,
         rx_positions=RX_POSITIONS,
         rx_goals=RX_GOALS,
+        num_agents=NUM_AGENTS,
         frequency_mhz=freq_mhz,
         run_metrics=False
     )
 
-    # 1. Extraer los obstáculos REALES (Slicer)
-    # Esto confirma que el entorno los tiene cargados
+    # 1. Recuperar límites de la escena para visualización correcta
+    scene_bounds = env.scene_bounds
+
+    # 2. Extraer obstáculos
     try:
         sfm_obstacles_torch = env.sfm_sim.ped_space.space
         obstacles_np = [o.numpy() for o in sfm_obstacles_torch]
         print(f"[INFO] Visualizador: {len(obstacles_np)} grupos de obstáculos detectados.")
     except AttributeError:
-        print("[WARNING] No se pudieron leer los obstáculos del simulador (¿Falta self.sfm_sim.ped_space?)")
+        print("[WARNING] No se pudieron leer los obstáculos del simulador.")
         obstacles_np = []
 
     obs, info = env.reset(seed=0)
     drone_traj, ue_traj, steps = [], [], []
 
     # Imagen de referencia (Mapa de calor)
-    out_img = OUT_DIR / f"radio_map_ref.png"
+    out_img = OUT_DIR / f"radio_map_{SCENE}_{MAX_STEPS} steps.png"
     if not out_img.exists():
         env.rt.render_scene_to_file(filename=str(out_img), with_radio_map=True)
 
@@ -339,6 +337,7 @@ def run_episode(freq_mhz: float) -> dict:
     return {
         "freq_mhz": freq_mhz,
         "obstacles": obstacles_np,
+        "bounds": scene_bounds,
         "tracks": {
             "drone": np.vstack(drone_traj),
             "ues": np.stack(ue_traj, axis=0),
@@ -354,16 +353,18 @@ def main():
         r = run_episode(f)
         tracks = r["tracks"]
         obstacles = r["obstacles"]
+        bounds = r["bounds"]
 
         # 1. Plot Estático
-        out_traj = OUT_DIR / f"traj_static_{int(f)}MHz.png"
-        plot_trajectories_xy_xz(tracks, obstacles, out_path=out_traj, title_prefix=f"SFM Slicer {f:.0f}MHz")
+        out_traj = OUT_DIR / f"traj_static_{SCENE}_{MAX_STEPS} steps_{int(f)} MHz.png"
+        plot_trajectories_xy_xz(tracks, obstacles, bounds, out_path=out_traj,
+                                freq_mhz=f, num_agents=NUM_AGENTS)
         print(f"Imagen guardada: {out_traj}")
 
         # 2. GIF
-        out_gif = OUT_DIR / f"animacion_{int(f)}MHz.gif"
+        out_gif = OUT_DIR / f"animacion_{SCENE}_{MAX_STEPS} steps_{int(f)} MHz.gif"
         print("Generando GIF...")
-        make_gif(tracks, obstacles, out_path=out_gif)
+        make_gif(tracks, obstacles, bounds, out_path=out_gif)
         print(f"GIF guardado: {out_gif}")
 
     print(f"[DONE] Pruebas finalizadas.")

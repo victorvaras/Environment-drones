@@ -19,7 +19,7 @@ if str(project_root) not in sys.path:
 from .sionnaEnv import SionnaRT
 from .dron import Dron
 from .receptores import ReceptoresManager, Receptor
-
+from .spawn_manager import SpawnManager
 
 class DroneEnv(gym.Env):
     """Entorno Gymnasium con Sionna RT (sin imagen de fondo)."""
@@ -29,6 +29,7 @@ class DroneEnv(gym.Env):
             self,
             rx_positions: list[tuple[float, float, float]] | None = None,
             rx_goals: list[tuple[float, float, float]] | None = None,
+            num_agents: int = 10,
             frequency_mhz: float = 3500.0,
             tx_power_dbm: float = 30.0,
             bandwidth_hz: float = 20e6,
@@ -50,13 +51,26 @@ class DroneEnv(gym.Env):
         self.step_count = 0
         self.run_metrics = run_metrics
 
-        # --- 1. Gestor de receptores ---
-        #Se crean los objetos 'Receptor' sin física aún, solo sus datos.
-        self.receptores = ReceptoresManager([Receptor(*p) for p in rx_positions])
-        numero_receptores = self.receptores.n
+        # --- 1. Configuración inicial de lo receptores ---
+        #Si se le asignan posiciones de manera estática
+        if rx_positions is not None:
+            self.current_num_agents = len(rx_positions)
+            using_manual_spawn = True #Se utilizara de manera manual
+        else:
+            self.current_num_agents = num_agents
+            using_manual_spawn = False #Se utilizara el SpawnManager
+
+        #Se definen las constantes físicas para usarlas en SpawnManager y SFM
+        #Parámetros Potencial Agente-Agente (PedPed)
+        self.sfm_v0 = 5.0     #Fuerza de repulsión entre receptores
+        self.sfm_sigma = 0.5  #Alcance de la fuerza (radio personal)
+
+        #Parámetros Potencial Agente-Obstáculo (PedSpace)
+        self.sfm_u0 = 80.0 #Magnitud de la fuerza repulsiva del muro u obstáculo
+        self.sfm_r = 0.5   #Radio de influencia (distancia a la que el muro empieza a "empujar")
 
         #Se inicializan las velocidades en 0 para el cálculo de Doppler
-        rx_velocities_mps = [(0.0, 0.0, 0.0) for _ in range(numero_receptores)]
+        rx_velocities_mps = [(0.0, 0.0, 0.0) for _ in range(self.current_num_agents)]
 
         # --- 2. SIONNA RT ---
         #Se cargar la escena antes de configurar la física para saber dónde están los obstáculos.
@@ -66,13 +80,12 @@ class DroneEnv(gym.Env):
             # tx_power_dbm=tx_power_dbm,
             # bandwidth_hz=bandwidth_hz,
             scene_name=scene_name,
-            num_ut=numero_receptores,
+            num_ut=self.current_num_agents, #Se reserva memoria para N receptores
             rx_velocities_mps=rx_velocities_mps,
         )
 
-        #Se construye la escena y se colocan los receptores
+        #Se construye la escena en Sionna
         self.rt.build_scene()
-        self.rt.attach_receivers(self.receptores.positions_xyz())
 
         # --- 3. PUENTE DE DATOS: EXTRACCIÓN DE OBSTÁCULOS (SLICER) ---
         #Se extrae la geometría estática de Sionna una sola vez.
@@ -103,23 +116,66 @@ class DroneEnv(gym.Env):
         obstacles_torch = [torch.tensor(o, dtype=torch.float32) for o in obstacles_np]
         print(f"[Gym] Se encontraron {len(obstacles_torch)} estructuras de obstáculos.")
 
-        # --- 4. CONFIGURACIÓN MOTOR DE NAVEGACIÓN Socialforce - SFM ---
+        # --- 4. GENERACIÓN DINÁMICA DE POSICIONES (SPAWN MANAGER) ---
+        #Si no se entregan posiciones manuales, se generan usando los obstáculos encontrados
+        if not using_manual_spawn:
+            print(f"[Gym] Generando {self.current_num_agents} posiciones y metas dinámicas")
+
+            #Límites 2D para el generador de posiciones
+            b_min = (self.rt.scene_bounds[0][0], self.rt.scene_bounds[0][1])
+            b_max = (self.rt.scene_bounds[1][0], self.rt.scene_bounds[1][1])
+
+            #Se realiza el llamado al metodo SpawnManager
+            spawn_manager = SpawnManager(obstacles_np, b_min, b_max)
+
+            #--- Vinculación física con SFM ---
+            #Margen entre receptores: sigma * 2.2 para que no se creen ya sintiendo la fuerza de otro receptor
+            safe_agent_dist = self.sfm_sigma * 2.2
+            #Margen de seguridad: r * 1.1 para que no se creen ya sintiendo la fuerza del muro
+            safe_wall_dist = self.sfm_r * 1.5
+
+            #Generar Posiciones Iniciales
+            rx_positions = spawn_manager.generate_positions(
+                n_agents=self.current_num_agents, #Número de receptores
+                min_dist_obs=safe_wall_dist,      #Distancia segura contra obstáculos
+                min_dist_agents=safe_agent_dist,  #Distancia segura entre receptores
+                z_height=1.5                      #Altura para receptores
+            )
+
+            #Generar Metas (Goals) si no existen
+            if rx_goals is None:
+                rx_goals = spawn_manager.generate_positions(
+                    n_agents=self.current_num_agents, #Número de receptores
+                    min_dist_obs=safe_wall_dist,      #Distancia segura contra obstáculos
+                    min_dist_agents=0.5,              #Distancia segura entre receptores (para evitar metas muy juntas)
+                    z_height=1.5                      #Altura para receptores
+                )
+
+        # --- 5. Confirmación de receptores ---
+        #Ahora que se tienen las posiciones iniciales (manuales o generadas), se crean los objetos
+        self.receptores = ReceptoresManager([Receptor(*p) for p in rx_positions])
+        numero_receptores = self.receptores.n
+
+        #Se actualizan en Sionna las posiciones iniciales
+        self.rt.attach_receivers(self.receptores.positions_xyz())
+
+        # --- 6. CONFIGURACIÓN MOTOR DE NAVEGACIÓN Socialforce - SFM ---
         dt = 0.1 #Paso de tiempo físico (100ms)
 
         #Potencial Agente-Agente (PedPed)
         #Define la fuerza de repulsión entre peatones para evitar choques entre ellos.
         ped_ped_potential = potentials.PedPedPotential2D(
-            v0=5.0,       #Fuerza de repulsión entre receptores
-            sigma=0.5,    #Alcance de la fuerza
-            asymmetry=0.3 #Factor de asimetria para esquive vertical entre receptores
+            v0=self.sfm_v0,       #Fuerza de repulsión entre receptores
+            sigma=self.sfm_sigma, #Alcance de la fuerza
+            asymmetry=0.3         #Factor de asimetria para esquive vertical entre receptores
         )
         ped_ped_potential.delta_t_step = dt
 
         #Potencial Agente-Obstáculo (PedSpace)
         ped_space_potential = potentials.PedSpacePotential(
             obstacles_torch,  #Se inyecta el mapa de obstáculos extraído de Sionna.
-            u0=80.0,  #Magnitud de la fuerza repulsiva del muro u obstáculo
-            r=1.0     #Radio de influencia (distancia a la que el muro empieza a "empujar")
+            u0=self.sfm_u0,  #Magnitud de la fuerza repulsiva del muro u obstáculo
+            r=self.sfm_r     #Radio de influencia (distancia a la que el muro empieza a "empujar")
         )
 
         #Inicialización del Simulador SFM
@@ -136,7 +192,7 @@ class DroneEnv(gym.Env):
         #Se guarda una referencia al potencial del PedSpace para visualización/debug
         self.sfm_sim.ped_space = ped_space_potential
 
-        # --- 5. Construcción del Tensor de Estado Inicial (State Tensor o Tensor de estado) ---
+        # --- 7. Construcción del Tensor de Estado Inicial (State Tensor o Tensor de estado) ---
         #Formato requerido por SFM: [x, y, vx, vy, ax, ay, gx, gy, tau, v_pref]
         np_initial_states = np.array(rx_positions)  #Posiciones iniciales
         np_goal_states = np.array(rx_goals)         #Metas (Goals)
@@ -163,7 +219,7 @@ class DroneEnv(gym.Env):
         #Se convierte a Tensor de PyTorch (formato requerido para la librería socialforce)
         self.sfm_current_state = torch.tensor(initial_state_np, dtype=torch.float32)
 
-        # --- 6. Configuración Final del Entorno (Bounds, Spaces, Rendering) ---
+        # --- 8. Configuración Final del Entorno (Bounds, Spaces, Rendering) ---
         #Se definen los límites del espacio de acción y observación para RL
         bounds_min = self.rt.scene_bounds[0]
         bounds_max = self.rt.scene_bounds[1]
@@ -200,6 +256,10 @@ class DroneEnv(gym.Env):
         #Reinicia el entorno a su estado inicial para un nuevo episodio.
         super().reset(seed=seed)
         self.step_count = 0
+
+        #Manejar semilla en Spawn Manager
+        if seed is not None:
+            np.random.seed(seed)
 
         #Reinicio del Dron
         self.dron = Dron(start_xyz=self._start, bounds=self.scene_bounds)
