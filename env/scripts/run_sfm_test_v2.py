@@ -259,7 +259,7 @@ def make_gif(tracks, obstacles, scene_bounds, out_path, fps=20):
     # --- LÓGICA DE SEGURIDAD ADAPTATIVA ---
     # Si T es pequeño (ej: 300), step_skip será 1 (sin saltos, fluido).
     # Si T es gigante (ej: 10000), step_skip será alto (ej: 20) para no explotar.
-    TARGET_TOTAL_FRAMES = 500
+    TARGET_TOTAL_FRAMES = 250
 
     if T <= TARGET_TOTAL_FRAMES:
         step_skip = 1  # Muestra TODOS los cuadros (Perfecto para escena simple)

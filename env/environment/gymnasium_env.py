@@ -347,7 +347,7 @@ class DroneEnv(gym.Env):
             #Algoritmo de Detección de Estancamiento (Stuck Detection)
             #Criterio: Si el agente está lejos de su meta (>1.0m) pero su velocidad es casi nula (<0.2),
             #se asume que está bloqueado por un equilibrio de fuerzas.
-            if dist_to_goal > 1.0 and vel_magnitude < 0.2:
+            if dist_to_goal > 1.0 and vel_magnitude < 0.05:
                 #Maniobra de Recuperación (Tangential Escape)
                 #Se calcula un vector perpendicular a la meta (-y, x) para generar deslizamiento lateral.
                 #De tal manera que se rompe la simetría y fuerza al agente a rodear el obstáculo (Wall Sliding).
