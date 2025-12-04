@@ -1267,7 +1267,7 @@ class SionnaRT:
         if self.scene is None or self.mi_scene is None:
             raise RuntimeError("SionnaRT: La escena no está construida.")
 
-        print(f"[SionnaRT Slicer] Iniciando escaneo de escena (Densidad: {grid_density}m)...")
+        print(f"[SionnaRT Slicer] Iniciando escaneo de escena (Densidad: {grid_density}m)")
 
         #1.-Se define el área de escaneo
         #Se obtienen los limites de toda la escena 3D de Sionna
@@ -1333,7 +1333,7 @@ class SionnaRT:
         #Se apilan en formato (N, 2) para API Socialforce
         sfm_points = np.stack([obs_x, obs_y], axis=1)
 
-        print(f"[SionnaRT Slicer] Escaneo completado. {len(sfm_points)} puntos de obstáculo detectados.")
+        print(f"[SionnaRT Slicer] Escaneo completado: {len(sfm_points)} puntos de obstáculo detectados.")
 
         #Como la API Socialforce espera una lista de arrays (PedSpacePotential).
         #Se le devuelve una lista con un solo gran array de puntos.

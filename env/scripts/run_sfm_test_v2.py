@@ -266,7 +266,7 @@ def make_gif(tracks, obstacles, scene_bounds, out_path, fps=20):
     else:
         step_skip = T // TARGET_TOTAL_FRAMES  # Salta para proteger RAM
 
-    print(f"[GIF] Generando animación con step_skip={step_skip} (Total frames: {T // step_skip})")
+    print(f"[GIF] Generando animación con step_skip = {step_skip} (Total frames: {T // step_skip})")
 
     frames_idx = range(0, T, step_skip)
 
@@ -297,16 +297,24 @@ def run_episode(freq_mhz: float) -> dict:
     # 1. Recuperar límites de la escena para visualización correcta
     scene_bounds = env.scene_bounds
 
-    # 2. Extraer obstáculos
+    obs, info = env.reset(seed=0)
+
+    #2. Extraer obstáculos
     try:
-        sfm_obstacles_torch = env.sfm_sim.ped_space.space
+        #Se intenta acceder a través del manager expuesto o directo
+        if hasattr(env, "mobility_manager") and env.mobility_manager.sfm_sim:
+            sfm_obstacles_torch = env.mobility_manager.sfm_sim.ped_space.space
+        elif hasattr(env, "sfm_sim") and env.sfm_sim:
+            sfm_obstacles_torch = env.sfm_sim.ped_space.space
+        else:
+            sfm_obstacles_torch = []
+
         obstacles_np = [o.numpy() for o in sfm_obstacles_torch]
         print(f"[INFO] Visualizador: {len(obstacles_np)} grupos de obstáculos detectados.")
-    except AttributeError:
+    except Exception as e:
         print("[WARNING] No se pudieron leer los obstáculos del simulador.")
         obstacles_np = []
 
-    obs, info = env.reset(seed=0)
     drone_traj, ue_traj, steps = [], [], []
 
     # Imagen de referencia (Mapa de calor)

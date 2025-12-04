@@ -20,6 +20,7 @@ from .sionnaEnv import SionnaRT
 from .dron import Dron
 from .receptores import ReceptoresManager, Receptor
 from .spawn_manager import SpawnManager
+from .receptores_mobility import ReceptorMobilityManager
 
 class DroneEnv(gym.Env):
     """Entorno Gymnasium con Sionna RT (sin imagen de fondo)."""
@@ -51,7 +52,7 @@ class DroneEnv(gym.Env):
         self.step_count = 0
         self.run_metrics = run_metrics
 
-        # --- 1. Configuración inicial de lo receptores ---
+        #1.Configuración de la Cantidad de receptores
         #Si se le asignan posiciones de manera estática
         if rx_positions is not None:
             self.current_num_agents = len(rx_positions)
@@ -60,39 +61,40 @@ class DroneEnv(gym.Env):
             self.current_num_agents = num_agents
             using_manual_spawn = False #Se utilizara el SpawnManager
 
-        #Se definen las constantes físicas para usarlas en SpawnManager y SFM
-        #Parámetros Potencial Agente-Agente (PedPed)
-        self.sfm_v0 = 5.0     #Fuerza de repulsión entre receptores
-        self.sfm_sigma = 0.5  #Alcance de la fuerza (radio personal)
+        #Se guardan las referencias manuales para el reset
+        self._manual_rx_pos = rx_positions if using_manual_spawn else None
+        self._manual_rx_goals = rx_goals if using_manual_spawn else None
 
-        #Parámetros Potencial Agente-Obstáculo (PedSpace)
-        self.sfm_u0 = 80.0 #Magnitud de la fuerza repulsiva del muro u obstáculo
-        self.sfm_r = 0.5   #Radio de influencia (distancia a la que el muro empieza a "empujar")
-
-        #Se inicializan las velocidades en 0 para el cálculo de Doppler
+        #Se inicializan las Velocidades iniciales para el cálculo de Doppler
         rx_velocities_mps = [(0.0, 0.0, 0.0) for _ in range(self.current_num_agents)]
 
-        # --- 2. SIONNA RT ---
-        #Se cargar la escena antes de configurar la física para saber dónde están los obstáculos.
+        #2.Sionna RT
         self.rt = SionnaRT(
             antenna_mode=antenna_mode,
             frequency_mhz=frequency_mhz,
             # tx_power_dbm=tx_power_dbm,
             # bandwidth_hz=bandwidth_hz,
             scene_name=scene_name,
-            num_ut=self.current_num_agents, #Se reserva memoria para N receptores
+            num_ut=self.current_num_agents,      #Se reserva memoria para N receptores
             rx_velocities_mps=rx_velocities_mps,
         )
+        self.rt.build_scene() #Se construye la escena en Sionna
 
-        #Se construye la escena en Sionna
-        self.rt.build_scene()
+        #3.Gestor de movilidad (Física y Navegación)
+        #Se inicializa el Manager pasandole los parámetros físicos
+        self.mobility_manager = ReceptorMobilityManager(
+            sionna_rt=self.rt,                                                   #Sionna
+            bounds_min=(self.rt.scene_bounds[0][0], self.rt.scene_bounds[0][1]), #Limites minimos de la escena
+            bounds_max=(self.rt.scene_bounds[1][0], self.rt.scene_bounds[1][1]), #Limites máximos de la escena
+            sfm_v0=5.0, sfm_sigma=0.5, sfm_u0=80.0, sfm_r=0.5                    #Parametros SFM
+        )
 
-        # --- 3. PUENTE DE DATOS: EXTRACCIÓN DE OBSTÁCULOS (SLICER) ---
+        #4.Extracción de Obstáculos (Slicer)
         #Se extrae la geometría estática de Sionna una sola vez.
         #Se utiliza la función 'get_sfm_obstacles'.
         print(f"[Gym] Extrayendo obstáculos de la escena '{scene_name}'...")
 
-        # --- LÓGICA DE AUTO-ESCALADO (AUTO-SCALE) ---
+        #Lógica de Auto-Escalado (Auto-Scale) para densidad del scanner
         #Se calcula el tamaño del mapa para decidir la densidad y proteger la RAM.
         bounds = self.rt.mi_scene.bbox()
         extent = max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y)
@@ -102,353 +104,116 @@ class DroneEnv(gym.Env):
             print(f"[Gym] Escena Gigante ({extent:.0f}m). Ajustando densidad a: {gym_density}m")
         elif extent > 500.0:
             gym_density = 0.8  #Escena mediana
-            print(f"[Gym] Escena Grande ({extent:.0f}m). Ajustando densidad a: {gym_density}m")
+            print(f"[Gym] Escena mediana ({extent:.0f}m). Ajustando densidad a: {gym_density}m")
         else:
             gym_density = 0.4  #Escena pequeña -> Alta precisión
-            print(f"[Gym] Escena Estándar ({extent:.0f}m). Usando alta precisión: {gym_density}m")
+            print(f"[Gym] Escena pequeña o estándar ({extent:.0f}m). Usando alta precisión: {gym_density}m")
 
         #Se utiliza el escaner para obtener los obstáculos para la API Socialforce (Slicer)
         #grid_density = densidad calculada dinámicamente
         obstacles_np = self.rt.get_sfm_obstacles(grid_density=gym_density)
 
-        #Se convierte la lista de Numpy a lista de Tensores PyTorch
-        #Requisito de socialforce para cálculo vectorizado
-        obstacles_torch = [torch.tensor(o, dtype=torch.float32) for o in obstacles_np]
-        print(f"[Gym] Se encontraron {len(obstacles_torch)} estructuras de obstáculos.")
+        #Se configura el manager con los obstáculos
+        self.mobility_manager.configure_obstacles(obstacles_np)
 
-        # --- 4. GENERACIÓN DINÁMICA DE POSICIONES (SPAWN MANAGER) ---
-        #Si no se entregan posiciones manuales, se generan usando los obstáculos encontrados
-        if not using_manual_spawn:
-            print(f"[Gym] Generando {self.current_num_agents} posiciones y metas dinámicas")
+        #Se inicializa self.receptores como None (se le asigna valor en reset)
+        self.receptores = None
 
-            #Límites 2D para el generador de posiciones
-            b_min = (self.rt.scene_bounds[0][0], self.rt.scene_bounds[0][1])
-            b_max = (self.rt.scene_bounds[1][0], self.rt.scene_bounds[1][1])
-
-            #Se realiza el llamado al metodo SpawnManager
-            spawn_manager = SpawnManager(obstacles_np, b_min, b_max)
-
-            #--- Vinculación física con SFM ---
-            #Margen entre receptores: sigma * 2.2 para que no se creen ya sintiendo la fuerza de otro receptor
-            safe_agent_dist = self.sfm_sigma * 2.2
-            #Margen de seguridad: r * 1.1 para que no se creen ya sintiendo la fuerza del muro
-            safe_wall_dist = self.sfm_r * 1.5
-
-            #Generar Posiciones Iniciales
-            rx_positions = spawn_manager.generate_positions(
-                n_agents=self.current_num_agents, #Número de receptores
-                min_dist_obs=safe_wall_dist,      #Distancia segura contra obstáculos
-                min_dist_agents=safe_agent_dist,  #Distancia segura entre receptores
-                z_height=1.5                      #Altura para receptores
-            )
-
-            #Generar Metas (Goals) si no existen
-            if rx_goals is None:
-                rx_goals = spawn_manager.generate_positions(
-                    n_agents=self.current_num_agents, #Número de receptores
-                    min_dist_obs=safe_wall_dist,      #Distancia segura contra obstáculos
-                    min_dist_agents=0.5,              #Distancia segura entre receptores (para evitar metas muy juntas)
-                    z_height=1.5                      #Altura para receptores
-                )
-
-        # --- 5. Confirmación de receptores ---
-        #Ahora que se tienen las posiciones iniciales (manuales o generadas), se crean los objetos
-        self.receptores = ReceptoresManager([Receptor(*p) for p in rx_positions])
-        numero_receptores = self.receptores.n
-
-        #Se actualizan en Sionna las posiciones iniciales
-        self.rt.attach_receivers(self.receptores.positions_xyz())
-
-        # --- 6. CONFIGURACIÓN MOTOR DE NAVEGACIÓN Socialforce - SFM ---
-        dt = 0.1 #Paso de tiempo físico (100ms)
-
-        #Potencial Agente-Agente (PedPed)
-        #Define la fuerza de repulsión entre peatones para evitar choques entre ellos.
-        ped_ped_potential = potentials.PedPedPotential2D(
-            v0=self.sfm_v0,       #Fuerza de repulsión entre receptores
-            sigma=self.sfm_sigma, #Alcance de la fuerza
-            asymmetry=0.3         #Factor de asimetria para esquive vertical entre receptores
-        )
-        ped_ped_potential.delta_t_step = dt
-
-        #Potencial Agente-Obstáculo (PedSpace)
-        ped_space_potential = potentials.PedSpacePotential(
-            obstacles_torch,  #Se inyecta el mapa de obstáculos extraído de Sionna.
-            u0=self.sfm_u0,  #Magnitud de la fuerza repulsiva del muro u obstáculo
-            r=self.sfm_r     #Radio de influencia (distancia a la que el muro empieza a "empujar")
-        )
-
-        #Inicialización del Simulador SFM
-        #Este gestionará el movimiento autónomo de los peatones.
-        self.sfm_sim = socialforce.Simulator(
-            delta_t=dt,                     #Paso de tiempo dentro del simulador SFM
-            ped_ped=ped_ped_potential,      #Potencial Agente-Agente (PedPed)
-            ped_space=ped_space_potential,  #Potencial Agente-Obstáculo (PedSpace)
-            oversampling=1,                 #Sincroniza la física del SFM 1:1 con el paso de Gym.
-            field_of_view=-1                #Permite que el Campo de visión sea de 360° (APF para cada receptor).
-        )
-
-        #Referencia Externa para el Script
-        #Se guarda una referencia al potencial del PedSpace para visualización/debug
-        self.sfm_sim.ped_space = ped_space_potential
-
-        # --- 7. Construcción del Tensor de Estado Inicial (State Tensor o Tensor de estado) ---
-        #Formato requerido por SFM: [x, y, vx, vy, ax, ay, gx, gy, tau, v_pref]
-        np_initial_states = np.array(rx_positions)  #Posiciones iniciales
-        np_goal_states = np.array(rx_goals)         #Metas (Goals)
-
-        #Se guardan las metas 2D para la lógica de control
-        self.sfm_goals_2d = np_goal_states[:, :2]
-
-        #Inicialización de variables
-        initial_velocities_np = np.zeros((numero_receptores, 2))                    #Velocidades iniciales (vx, vy)
-        initial_accelerations_np = np.zeros((numero_receptores, 2))                 #Aceleraciones iniciales (ax, ay)
-        initial_taus_np = np.full((numero_receptores, 1), 0.5)       #Tiempo de reacción (tau)
-        preferred_speeds_np = np.full((numero_receptores, 1), 1.3)   #Velocidad deseada (v_pref = 1.3 m/s)
-
-        #Se ensambla el Tensor de Estado
-        initial_state_np = np.hstack([
-            np_initial_states[:, :2],   #Columna 0-1: Posición (x, y)
-            initial_velocities_np,      #Columna 2-3: Velocidad (vx, vy)
-            initial_accelerations_np,   #Columna 4-5: Aceleración (ax, ay)
-            self.sfm_goals_2d,          #Columna 6-7: Metas (Goals) (gx, gy)
-            initial_taus_np,            #Columna 8  : Tau
-            preferred_speeds_np         #Columna 9  : Velocidad Preferida (v_pref)
-        ])
-
-        #Se convierte a Tensor de PyTorch (formato requerido para la librería socialforce)
-        self.sfm_current_state = torch.tensor(initial_state_np, dtype=torch.float32)
-
-        # --- 8. Configuración Final del Entorno (Bounds, Spaces, Rendering) ---
+        #5.Configuración Final del Entorno (Bounds, Spaces, Rendering)
+        #Bounds y Dron
         #Se definen los límites del espacio de acción y observación para RL
-        bounds_min = self.rt.scene_bounds[0]
-        bounds_max = self.rt.scene_bounds[1]
-        bounds = ((bounds_min[0], bounds_max[0]), (bounds_min[1], bounds_max[1]), (bounds_min[2], bounds_max[2]))
-        self.scene_bounds = bounds
+        scene_bounds = ((self.rt.scene_bounds[0][0], self.rt.scene_bounds[1][0]),
+                        (self.rt.scene_bounds[0][1], self.rt.scene_bounds[1][1]),
+                        (self.rt.scene_bounds[0][2], self.rt.scene_bounds[1][2]))
+        self.scene_bounds = scene_bounds
 
         #Inicialización del Dron
-        self.dron = Dron(start_xyz=self._start, bounds=bounds)
-        self.rt.move_tx(self.dron.pos)  #Sincronización inicial física-lógica
+        self.dron = Dron(start_xyz=self._start, bounds=scene_bounds)
+        self.rt.move_tx(self.dron.pos) #Sincronización inicial física-lógica
 
-        #Espacios de Gymnasium (Acción y Observación)
+        #Espacios de Gymnasium (Espacios de Acción y Observación)
         self.action_space = spaces.Box(low=-5.0, high=5.0, shape=(3,), dtype=np.float32)
+
+        #Se asume N fijo para el shape del espacio de observación
         self.observation_space = spaces.Box(
-            low=-1e9, high=1e9, shape=(3 + self.receptores.n,), dtype=np.float32
+            low=-1e9, high=1e9, shape=(3 + self.current_num_agents,), dtype=np.float32
         )
-        self.dron.bounds = bounds
+        self.dron.bounds = scene_bounds
 
-        #Estado de renderizado
-        self._fig = None
-        self._ax = None
-        self._canvas = None
-        self._ax_map = None
-        self._ax_list = None
-        self._ax_table = None
-        self._sc_rx = None
-        self._sc_drone = None
-        self._cbar = None
-        self._name_texts = []
-        self._acc = None
-        self._last_ue_metrics = None
-
+        #Variables de Renderizado
+        self._init_render_vars()
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         #Reinicia el entorno a su estado inicial para un nuevo episodio.
         super().reset(seed=seed)
         self.step_count = 0
 
-        #Manejar semilla en Spawn Manager
-        if seed is not None:
-            np.random.seed(seed)
-
-        #Reinicio del Dron
+        #Reinicio del Dron y TX
         self.dron = Dron(start_xyz=self._start, bounds=self.scene_bounds)
 
         #Sincronización con Sionna
         #Se mueve el transmisor a la posición inicial para que el cálculo sea correcto desde t=0
         self.rt.move_tx(self.dron.pos)
 
-        #Generación de la primera observación
+        #Renicio de receptores (Manager)
+        #El Manager se encarga de: Spawn, Metas, SFM Reset
+        self.receptores = self.mobility_manager.reset(
+            num_agents=self.current_num_agents,  #Número de receptores
+            rx_positions=self._manual_rx_pos,    #Posiciones iniciales
+            rx_goals=self._manual_rx_goals,      #Metas
+            seed=seed                            #Semilla
+        )
+
+        #Sincronización con Sionna (attach_receivers)
+        #El manager crea los objetos, pero el entorno los conecta al RT.
+        self.rt.attach_receivers(self.receptores.positions_xyz())
+
+        #Se expone el simulador para visualización externa
+        self.sfm_sim = self.mobility_manager.sfm_sim
+
+        #Regenerar primera observación (Observación inicial)
         obs = np.concatenate([self.dron.pos]).astype(np.float32)
         info = {}
 
-        #Limpieza de estado de renderizado
+        #Limpieza de estado de renderizado y métricas
         #Se borran las referencias gráficas para evitar superposiciones en nuevos episodios
-        self._fig = None
-        self._ax_map = None
-        self._ax_list = None
-        self._ax_table_top = None
-        self._ax_table_br = None
-        self._canvas = None
-
-        self._sc_rx = None
-        self._sc_drone = None
-        self._cbar = None
-        self._name_texts = []
-
+        self._init_render_vars()
         self._last_ue_metrics = []
-
-        #Verificación auxiliar del número de usuarios
-        try:
-            self.num_ut = int(self.receptores.positions_xyz().shape[0])
-        except Exception:
-            # Fallback si tu contenedor expone otra API
-            self.num_ut = int(getattr(self.receptores, "num", getattr(self.receptores, "n", 0)))
-
-       
+        self.num_ut = self.receptores.n
 
         return obs, info
 
     def step(self, action: np.ndarray):
-        #Ejecuta un paso de simulación (t -> t+dt)
         """
-        Para el movimiento de los receptores o personas se implemento una
-        arquitectura de navegación híbrida:
-        1. Planificación Local (SFM): Cálculo de fuerzas sociales base.
-        2. Control Reactivo (Python): Corrección de mínimos locales y estancamiento.
+        Ejecuta un paso de simulación (t -> t+dt)
         """
         self.step_count += 1
 
-        # Movimiento del dron
+        #1.Movimiento del Dron
         self.dron.step_delta(action)
         self.rt.move_tx(self.dron.pos)
 
-        #---Movimiento de personas / receptores (Rx's) - Social Force Model (SFM)---
-        #Se consulta a la librería socialforce el siguiente estado deseado.
-        #Se considera: Atracción a la meta + Repulsión entre agentes + Repulsión de obstáculos.
-        proposed_state = self.sfm_sim(self.sfm_current_state) #Se obtiene el "estado propuesto" por el SFM
-        proposed_state_np = proposed_state.detach().numpy()   #Se convierte la respuesta de Torch a NumPy
+        #2.Movimiento de Receptores
+        #SFM + Control Reactivo + Doppler + Validación
+        self.mobility_manager.step(dt=0.1)
 
-        #Se extrae solo el vector velocidad propuesto (Vx, Vy)
-        proposed_vel_2d = proposed_state_np[:, 2:4]
+        #3.Métricas y Sionna SYS
+        info = self._get_metrics_info()
+        # sys_metrics = self.rt.run_sys_step()
 
-        # ------------------------------------------------------------
-        # Control Reactivo: Evasión de Mínimos Locales
-        # ------------------------------------------------------------
-        #Problema: El modelo SFM puede caer en equilibrios estables (velocidad ~0) frente a muros planos.
-        #Solución: Se detecta el estancamiento y se aplica una fuerza de escape tangencial.
-        current_pos_2d = self.sfm_current_state.numpy()[:, 0:2]
-
-        for i in range(self.receptores.n):
-            #Análisis del Estado Cinético (Velocidad actual)
-            vel_magnitude = np.linalg.norm(proposed_vel_2d[i])
-
-            #Análisis Geométrico (Vector a la Meta)
-            goal_pos = self.sfm_goals_2d[i]
-            to_goal_vec = goal_pos - current_pos_2d[i]
-            dist_to_goal = np.linalg.norm(to_goal_vec)
-
-            #Se normaliza el vector dirección
-            if dist_to_goal > 1e-3:
-                to_goal_dir = to_goal_vec / dist_to_goal
-            else:
-                to_goal_dir = np.array([0.0, 0.0])
-
-            #Algoritmo de Detección de Estancamiento (Stuck Detection)
-            #Criterio: Si el agente está lejos de su meta (>1.0m) pero su velocidad es casi nula (<0.2),
-            #se asume que está bloqueado por un equilibrio de fuerzas.
-            if dist_to_goal > 1.0 and vel_magnitude < 0.05:
-                #Maniobra de Recuperación (Tangential Escape)
-                #Se calcula un vector perpendicular a la meta (-y, x) para generar deslizamiento lateral.
-                #De tal manera que se rompe la simetría y fuerza al agente a rodear el obstáculo (Wall Sliding).
-                #Vector base perpendicular (90 grados respecto a la meta)
-                tangent_force = np.array([-to_goal_dir[1], to_goal_dir[0]])
-
-                #Determinismo por ID del receptor
-                #Se usa el índice 'i' del agente.
-                #Esto garantiza que el agente nunca cambie de opinión a mitad de camino.
-                #Si i es par -> Gira a un lado. Si es impar -> Gira al otro.
-                if i % 2 == 0:
-                    tangent_force = -tangent_force
-
-                #Inyección de Fuerza
-                #Se usa 8.0 para que la fuerza de escape sea comparable a la del muro (en este caso u0 = 80).
-                #asegurando un deslizamiento rápido y visible.
-                proposed_vel_2d[i] += tangent_force * 8.0
-                # ============================================================
-
-        #Integración de Euler (Cálculo de nueva posición)
-        #Se calcula la posición candidata: Posición Nueva = Posición Actual + Velocidad Final * dt
-        dt = 0.1
-        final_proposed_pos_2d = current_pos_2d + proposed_vel_2d * dt
-
-        #Validación física y actualización
-        #Se prepara el nuevo array de estado validado y actualización
-        current_positions_3d = np.array([rx.position for rx in self.rt.rx_list])
-        new_validated_state_np = self.sfm_current_state.numpy().copy()
-        #Esto ayuda evita el atravesar muros debido a pasos de tiempo discretos.
-        #Se consulta si el movimiento es válido
-
-        for i, rx in enumerate(self.rt.rx_list):
-            #Limpieza de tipos de datos (Data Hygiene)
-            #Se convierten los Tensores de DrJit/Torch a float de Python puro
-            #con la finalidad de evitar conflictos de memoria en NumPy.
-            z_clean = float(current_positions_3d[i][2])
-            next_x = float(final_proposed_pos_2d[i, 0])
-            next_y = float(final_proposed_pos_2d[i, 1])
-            vel_x = float(proposed_vel_2d[i, 0])
-            vel_y = float(proposed_vel_2d[i, 1])
-
-            #Se construyen las coordenadas candidatas
-            pos_actual_clean = np.array([float(current_positions_3d[i][0]), float(current_positions_3d[i][1]), z_clean])
-            pos_propuesta_clean = np.array([next_x, next_y, z_clean])
-
-            #Chequeo de Colisión Dura (Hard Collision)
-            #Si a pesar de las fuerzas de repulsión, el agente intenta atravesar un muro u obstáculo
-            #el motor de física (Sionna) lo detiene.
-            if self.rt.is_move_valid_receptores(pos_actual_clean, pos_propuesta_clean):
-                #Movimiento Válido: se actualiza la física (posición) y estado
-                rx.position = [next_x, next_y, z_clean]
-                rx.velocity = [vel_x, vel_y, 0.0]
-                new_validated_state_np[i, 0:2] = [next_x, next_y]
-                new_validated_state_np[i, 2:4] = [vel_x, vel_y]
-            else:
-                #Colisión: Detención de emergencia
-                rx.velocity = [0.0, 0.0, 0.0]
-                new_validated_state_np[i, 2:4] = [0.0, 0.0]
-
-        #Se guarda el estado actualizado para ser utilizado en el siguiente ciclo
-        self.sfm_current_state = torch.tensor(new_validated_state_np, dtype=torch.float32)
-
-
-
-        # --- Ejecutar paso SYS y obtener métricas ---
-        #sys_metrics = self.rt.run_sys_step()
-        if self.run_metrics:
-            # Modo Lento (Completo)
-            sys_metrics = self.rt.run_sys_step()
-            info = {
-                "ue_metrics": sys_metrics["ue_metrics"],
-                "tbler_running_per_ue": sys_metrics.get("tbler_running_per_ue"),
-            }
-        else:
-            # Modo Rápido (Solo Física)
-            info = {
-                "ue_metrics": [],
-                "tbler_running_per_ue": [],
-            }
-
-        # --- Recompensa ---
-        # reward = float(np.mean(snr))
+        #Recompensa
         reward = 1.0
 
-        # --- Observación ---
+        #Observación
         obs = np.concatenate([self.dron.pos]).astype(np.float32)
 
-        # --- Terminación ---
+        #Terminación
         terminated = False
         truncated = self.step_count >= self.max_steps
 
-        # Renderizado (usa 'info', que ya está seguro)
-        if self.render_mode == "human":
-            self._last_ue_metrics = info["ue_metrics"]
-            self._last_tbler_running_per_ue = info.get("tbler_running_per_ue", None)
-            self._render_to_figure()
-        elif self.render_mode == "rgb_array":
-            self._last_ue_metrics = info["ue_metrics"]
-            self._last_tbler_running_per_ue = info.get("tbler_running_per_ue", None)
-            frame = self._render_to_array()
-            info["frame"] = frame
+        #Renderizado
+        if self.render_mode is not None:
+            self._handle_render(info)
 
         return obs, reward, terminated, truncated, info
 
@@ -761,6 +526,39 @@ class DroneEnv(gym.Env):
         self._ax_gp = None
         self._bars_gp = None
         self._bar_labels = []
+
+    def _init_render_vars(self):
+        self._fig = None
+        self._ax = None
+        self._canvas = None
+        self._ax_map = None
+        self._ax_list = None
+        self._ax_table = None
+        self._sc_rx = None
+        self._sc_drone = None
+        self._cbar = None
+        self._name_texts = []
+        self._acc = None
+        self._last_ue_metrics = None
+
+    def _get_metrics_info(self):
+        if self.run_metrics:
+            # Modo Lento (Física + Métricas)
+            sys_metrics = self.rt.run_sys_step()
+            return {
+                "ue_metrics": sys_metrics["ue_metrics"],
+                "tbler_running_per_ue": sys_metrics.get("tbler_running_per_ue"),
+            }
+        # Modo Rápido (Física)
+        return {"ue_metrics": [], "tbler_running_per_ue": []}
+
+    def _handle_render(self, info):
+        self._last_ue_metrics = info["ue_metrics"]
+        self._last_tbler_running_per_ue = info.get("tbler_running_per_ue", None)
+        if self.render_mode == "human":
+            self._render_to_figure()
+        elif self.render_mode == "rgb_array":
+            info["frame"] = self._render_to_array()
 
     """
     # ================= Render avanzado (dual snapshot) =================
