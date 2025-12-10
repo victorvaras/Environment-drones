@@ -52,7 +52,7 @@ RX_POSITIONS = None
 #Metas de los receptores
 RX_GOALS = None
 #Máximo de pasos para la simulación (N° de steps de la simulación)
-MAX_STEPS = 1000
+MAX_STEPS = 100
 #Frecuencias de la simulación
 FREQS_MHZ = [3500.0]
 FREQ_LABELS = [f"{f:.0f} MHz" for f in FREQS_MHZ]
@@ -374,6 +374,8 @@ def make_gif(tracks, obstacles, scene_bounds, out_path, fps=20):
 def run_episode(freq_mhz: float) -> dict:
     print(f"--- Iniciando Episodio {freq_mhz} MHz ---")
 
+    mode_set_vuelo = 7
+
     env = DroneEnv(
         render_mode=None,
         scene_name=SCENE,
@@ -384,7 +386,8 @@ def run_episode(freq_mhz: float) -> dict:
         num_agents=NUM_AGENTS,
         antenna_mode="SECTOR3_3GPP",
         frequency_mhz=freq_mhz,
-        run_metrics=True
+        run_metrics=True,
+        mode_set_vuelo = mode_set_vuelo,
     )
 
     # Recuperar límites
@@ -414,7 +417,10 @@ def run_episode(freq_mhz: float) -> dict:
     env.rt.render_scene_to_file(filename=str(out_img), with_radio_map=True)
 
     t = 0
+    num = 0
     while not (done or trunc):
+        num += 1
+        #print(f"Step: {num}")
         # Snapshot trayectoria
         drone_traj.append(_get_drone_xyz(env.rt).copy())
         ue_traj.append(_get_rx_positions_xyz(env.rt).copy())

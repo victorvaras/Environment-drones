@@ -40,7 +40,7 @@ class DroneEnv(gym.Env):
             max_steps: int = 400,
             render_mode: str | None = None,
             drone_start: tuple[float, float, float] = (0.0, 0.0, 20.0),
-            run_metrics: bool = False
+            run_metrics: bool = False,
 
             mode_set_vuelo: int = 7,
             step_durations: float = 0.1,
@@ -133,7 +133,7 @@ class DroneEnv(gym.Env):
 
         #Inicialización del Dron
         self.dron = Dron(start_xyz=self._start, bounds=scene_bounds)
-        self.rt.move_tx(self.dron.pos) #Sincronización inicial física-lógica
+        self.rt.move_tx(self.dron.pos,(0,0,0)) #Sincronización inicial física-lógica
 
         #Espacios de Gymnasium (Espacios de Acción y Observación)
         self.action_space = spaces.Box(low=-5.0, high=5.0, shape=(3,), dtype=np.float32)
@@ -276,6 +276,8 @@ class DroneEnv(gym.Env):
         #Renderizado
         if self.render_mode is not None:
             self._handle_render(info)
+
+        print(f"Termine: {terminated}, Truncated: {truncated}")
 
         return obs, reward, terminated, truncated, info
 
