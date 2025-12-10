@@ -1,0 +1,44 @@
+import bpy
+from collections import defaultdict
+
+EXCLUDE_PREFIX = "itu_"
+
+scene = bpy.context.scene
+
+mat_to_objects = defaultdict(list)
+
+for obj in scene.objects:
+    if obj.type != 'MESH':
+        continue
+
+    for slot in obj.material_slots:
+        mat = slot.material
+        if mat is None:
+            continue
+
+        if mat.name.startswith(EXCLUDE_PREFIX):
+            continue
+
+        if obj.name not in mat_to_objects[mat.name]:
+            mat_to_objects[mat.name].append(obj.name)
+
+# Crear / limpiar bloque de texto para el reporte
+report_name = "Material_Report"
+if report_name in bpy.data.texts:
+    text_block = bpy.data.texts[report_name]
+    text_block.clear()
+else:
+    text_block = bpy.data.texts.new(report_name)
+
+text_block.write("=== Materiales usados que NO comienzan con 'itu_' y sus objetos ===\n\n")
+
+if not mat_to_objects:
+    text_block.write("No se encontraron materiales usados que cumplan el filtro.\n")
+else:
+    for mat_name, obj_names in sorted(mat_to_objects.items()):
+        text_block.write(f"Material: {mat_name}  (usado por {len(obj_names)} objeto(s))\n")
+        for name in obj_names:
+            text_block.write(f"  - {name}\n")
+        text_block.write("-" * 50 + "\n")
+
+print(f"Reporte generado en el texto: {report_name}")
