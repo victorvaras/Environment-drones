@@ -38,7 +38,7 @@ from env.environment.gymnasium_env import DroneEnv  # adapta si tu ruta difiere
 
 # ========= Configuración =========
 SCENE = "simple_street_canyon"  # p.ej. "santiago.xml", "munich" "simple_street_canyon"
-DRONE_START = (-85.0, 0.0, 10.0)
+DRONE_START = (-85.0, 0.0, 20.0)
 RX_POSITIONS = [
     #(-50.0, 0.0, 1.5),
     (-80.0,    -55.0, 1.5),    
@@ -52,7 +52,7 @@ RX_POSITIONS = [
     
 
 ]
-MAX_STEPS = 100
+MAX_STEPS = 50
 
 # Compara dos frecuencias (en MHz). Cambia a lo que necesites.
 FREQS_MHZ = [3500.0] #28000
@@ -1411,7 +1411,7 @@ def plot_slope_all_ues_onefig(df_all: pd.DataFrame, freq_mhz: float, out_dir: Pa
 
 def run_episode(freq_mhz: float) -> dict:
 
-    mode_set_vuelo = 0
+    mode_set_vuelo = 7
 
     env = DroneEnv(
         render_mode=None,
@@ -1443,7 +1443,7 @@ def run_episode(freq_mhz: float) -> dict:
 
         
         
-        a = [0.30, 0.30, 0.0, 0.0]
+        a = [150, 0.0, 0.0, 20.0]
         b = [0, 0, 0]
 
         obs, rew, done, trunc, info = env.step(a, b)

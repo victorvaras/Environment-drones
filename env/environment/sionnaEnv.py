@@ -61,7 +61,7 @@ def _resolve_scene_path(scene_id: str) -> str | None:
             return str(xml)
 
     # Buscar en Mapas-pruebas/
-    base_maps = Path(__file__).resolve().parents[2] / "Mapas-pruebas"
+    base_maps = Path(__file__).resolve().parents[2] / "Mapas-Sionna"
     # Si ya viene con extensión (ej: plaza.glb), lo busca directo
     cand_file = base_maps / scene_id
     if cand_file.exists():
@@ -532,13 +532,14 @@ class SionnaRT:
             self.scene.add(rx)
             self.rx_list.append(rx)
 
-    def move_tx(self, pos_xyz):
+    def move_tx(self, pos_xyz, drone_velocity_mps):
         """Mueve TODOS los TX (1 o 3) a la misma posición del dron."""
         assert self.txs, "TX no inicializados."
         pos = [float(pos_xyz[0]), float(pos_xyz[1]), float(pos_xyz[2])]
+        #drone_velocity_mps =  (5.0, 5.0, 0.0)
         for tx in self.txs:
             tx.position = pos
-        # Mantiene orientaciones según el modo (no se recalculan aquí)
+            tx.velocity = drone_velocity_mps
 
 
 
@@ -1246,37 +1247,4 @@ class SionnaRT:
 
         # Ningún rayo intersectó
         return True
-    
-    # === Helpers y dumps de depuración 
-
-    def _safe_get(self, obj, name, default=None):
-        return getattr(obj, name, default) if obj is not None else default
-
-    def _pattern_name(self, arr):
-        p = self._safe_get(arr, "pattern", None)
-        return str(p) if p is not None else "N/A"
-
-    def _pol_name(self, arr):
-        p = self._safe_get(arr, "polarization", None)
-        return str(p) if p is not None else "N/A"
-
-    def _array_shape(self, arr):
-        if arr is None:
-            return "N/A"
-        nr = self._safe_get(arr, "num_rows", "N/A")
-        nc = self._safe_get(arr, "num_cols", "N/A")
-        dv = self._safe_get(arr, "vertical_spacing", "N/A")
-        dh = self._safe_get(arr, "horizontal_spacing", "N/A")
-        return f"{nr}x{nc} (dv={dv} λ, dh={dh} λ)"
-
-    def _f_lambda(self, freq_hz):
-        c = 299792458.0
-        return c / float(freq_hz)
-
-    def _ypr_str(self, ypr):
-        try:
-            y, p, r = [float(v) for v in ypr]
-            return f"yaw={y:.2f}°, pitch={p:.2f}°, roll={r:.2f}°"
-        except Exception:
-            return str(ypr)
-
+ 

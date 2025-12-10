@@ -1,24 +1,3 @@
-"""
-DroneVelocityEnv — Wrapper minimalista y adaptable para PyFlyt (QuadX)
-con soporte explícito para los modos 4, 6 y 7 en un *único* init.
-
-Basado en la documentación oficial de PyFlyt (QuadX.set_mode) y su paper.
-Requisitos:
-    pip install pyflyt numpy matplotlib
-
-Modos soportados (según PyFlyt QuadX.set_mode):
-    4: [u, v,  vr, z]   -> velocidades *en el cuerpo* + altura absoluta (mundo)
-    6: [vx, vy, vr, vz] -> velocidades *en el mundo* + velocidad vertical
-    7: [x,  y,  r,  z]  -> posición (mundo) + yaw absoluto
-
-Esta clase permite:
-  - Inicializar el dron indicando directamente el modo (4, 6 ó 7).
-  - Ejecutar pasos con los *setpoints nativos* de cada modo (sin transformaciones intermedias).
-  - (Modo 6) Opción auxiliar para "auto-ajustar" altura a un z_objetivo (calculando vz).
-  - Registrar trayectoria y graficar 3D, XY, velocidades y perfil de altura.
-
-Autor: ChatGPT (para Víctor)
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -42,7 +21,7 @@ class DroneVelocityEnvConfig:
     control_hz: int = 120
     physics_hz: int = 240
 
-    # Modo de control (OBLIGATORIO: 4, 6 o 7)
+    # Modo de control 
     mode: int = 6
 
     # Render
@@ -59,33 +38,13 @@ class DroneVelocityEnvConfig:
 # ----------------------------- Clase principal --------------------------------
 
 class DroneVelocityEnv:
-    """
-    Wrapper minimalista para controlar un QuadX de PyFlyt.
 
-    API:
-        - reset() -> (pos, rpy)
-        - close()
-        - set_mode(mode)
-        - get_pose() -> (pos, rpy)
-
-        - step_mode4([u, v, vr, z], dt)
-        - step_mode6([vx, vy, vr, vz], dt)
-        - step_mode6_holdz(vx, vy, vr, dt, z_ref, kp=..., ki=..., vz_limit=...)
-        - step_mode7([x, y, r, z], dt)
-
-        - step_sequence_modeX(lista_de_(sp4, dt))  # para 4/6/7
-
-        - plot_trajectory_3d(...)
-        - plot_xy(...)
-        - plot_velocities(...)
-        - plot_altitude(...)
-    """
-
-    # --------------------------- construcción ---------------------------------
-
-    def __init__(self, cfg: DroneVelocityEnvConfig,
+    def __init__(self, 
+                 cfg: DroneVelocityEnvConfig,
                  step_durations: float = 0.1
                  ):
+        
+        
         self.cfg = cfg
 
 
@@ -143,6 +102,12 @@ class DroneVelocityEnv:
         if mode not in (-1, 0, 1, 2, 3, 4, 5, 6, 7):
             raise ValueError("Modo inválido para QuadX.")
         self.env.set_mode(int(mode))
+
+
+    def get_velocity(self) -> Tuple[float, float, float]:
+        st = self.env.state(0)  # shape (4,3)
+        vel = np.asarray(st[2, :], dtype=float)
+        return tuple(vel.tolist())
 
     def get_pose(self) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -216,102 +181,6 @@ class DroneVelocityEnv:
         pos, rpy = self._run_for(dt, sp, log_as="generic")
         return pos
 
-    # ----------------------- MODO 4: [u, v, vr, z] -----------------------------
-
-    def step_mode4(self, uvrz: Iterable[float], dt: float):
-        """Aplica Modo 4 DIRECTO durante dt segundos y devuelve (pos, rpy)."""
-        self.set_mode(4)
-        return self._run_for(dt, np.asarray(uvrz, dtype=float), log_as="mode4")
-
-    def step_sequence_mode4(self, seq: Iterable[Tuple[Iterable[float], float]]):
-        out: List[Tuple[np.ndarray, np.ndarray]] = []
-        self.set_mode(4)
-        for sp4, dt in seq:
-            out.append(self._run_for(dt, np.asarray(sp4, dtype=float), log_as="mode4"))
-        return out
-
-    # ----------------------- MODO 6: [vx, vy, vr, vz] -------------------------
-
-    def step_mode6(self, vxvyvrvz: Iterable[float], dt: float):
-        """Aplica Modo 6 DIRECTO durante dt segundos y devuelve (pos, rpy)."""
-        self.set_mode(6)
-        return self._run_for(dt, np.asarray(vxvyvrvz, dtype=float), log_as="mode6")
-
-    def step_sequence_mode6(self, seq: Iterable[Tuple[Iterable[float], float]]):
-        out: List[Tuple[np.ndarray, np.ndarray]] = []
-        self.set_mode(6)
-        for sp4, dt in seq:
-            out.append(self._run_for(dt, np.asarray(sp4, dtype=float), log_as="mode6"))
-        return out
-
-    def step_mode6_holdz(
-        self,
-        vx: float, vy: float, vr: float, dt: float,
-        z_ref: Optional[float] = None,
-        kp: float = 2.0, ki: float = 0.0,
-        vz_limit: float = 8.0,
-    ):
-        """
-        Auxiliar para Modo 6: mantiene/ajusta altura a z_ref "lo antes posible".
-        Calcula vz = sat(kp*e + ki*∫e), e = (z_ref - z).
-        """
-        self.set_mode(6)
-
-        # Altura referencia
-        if z_ref is None:
-            z_ref = float(self.get_pose()[0][2])
-
-        integ = 0.0
-        n_steps = max(1, int(round(dt / self.dt_control)))
-
-        pos_prev, rpy_prev = self.get_pose()
-        yaw_prev = float(rpy_prev[2])
-
-        for _ in range(n_steps):
-            # Estado actual
-            pos, rpy = self.get_pose()
-            z = float(pos[2])
-            yaw = float(rpy[2])
-
-            # Control PI en z -> vz
-            e = z_ref - z
-            integ += e * self.dt_control
-            vz_cmd = float(np.clip(kp * e + ki * integ, -vz_limit, vz_limit))
-
-            sp = np.array([vx, vy, vr, vz_cmd], dtype=float)
-            self.env.set_setpoint(0, sp)
-            self.env.step()
-
-            # Log
-            if self.cfg.record_trajectory:
-                self.positions_history.append(pos.copy())
-                self.yaw_history.append(yaw)
-
-                self.cmd_history.append(np.array([vx, vy, vz_cmd, vr], dtype=float))
-
-                dp = (pos - pos_prev) / self.dt_control
-                dyaw = np.unwrap([yaw_prev, yaw])[1] - np.unwrap([yaw_prev, yaw])[0]
-                vr_meas = dyaw / self.dt_control
-                self.meas_history.append(np.array([dp[0], dp[1], dp[2], vr_meas], dtype=float))
-
-            pos_prev = pos
-            yaw_prev = yaw
-
-        return self.get_pose()
-
-    # ----------------------- MODO 7: [x, y, r, z] -----------------------------
-
-    def step_mode7(self, xyrz: Iterable[float], dt: float):
-        """Aplica Modo 7 DIRECTO durante dt segundos y devuelve (pos, rpy)."""
-        self.set_mode(7)
-        return self._run_for(dt, np.asarray(xyrz, dtype=float), log_as="mode7")
-
-    def step_sequence_mode7(self, seq: Iterable[Tuple[Iterable[float], float]]):
-        out: List[Tuple[np.ndarray, np.ndarray]] = []
-        self.set_mode(7)
-        for sp4, dt in seq:
-            out.append(self._run_for(dt, np.asarray(sp4, dtype=float), log_as="mode7"))
-        return out
 
     # ------------------------------- Gráficas ---------------------------------
 
@@ -447,35 +316,6 @@ class DroneVelocityEnv:
         plt.close(fig)
 
 
-    def _infer_step_params(self):
-        """
-        Devuelve (ctrls_per_step, dt_step).
-        - Si existe self.ctrls_per_step lo usa directamente.
-        - Si no, intenta inferir con self.rl_hz (si existe).
-        - Si no hay nada, asume 1 control por step (equivalente a step = índice).
-        """
-        dtc = float(self.dt_control)
-        control_hz = 1.0 / dtc
-
-        # Opción 1: atributo explícito
-        cps = getattr(self, "ctrls_per_step", None)
-        if isinstance(cps, (int, float)) and cps >= 1:
-            cps = int(round(cps))
-        else:
-            # Opción 2: inferir desde rl_hz si existe
-            rl_hz = getattr(self, "rl_hz", None)
-            if rl_hz is not None and rl_hz > 0:
-                cps = max(1, int(round(control_hz / float(rl_hz))))
-            else:
-                cps = 1
-
-        dt_step = cps * dtc
-        return cps, dt_step
-
-
-
-
-
     def save_all_plots(
         self,
         out_dir,
@@ -577,26 +417,6 @@ class DroneVelocityEnv:
 
         return time_to_step, step_to_time, edges, n_steps
 
-
-    def compute_step_index_from_durations(self):
-        """
-        Devuelve un vector entero step_idx (longitud N) con el número de step de cada muestra de control,
-        usando EXCLUSIVAMENTE self.step_durations.
-        """
-        import numpy as np
-        if not getattr(self, "positions_history", None):
-            raise ValueError("[compute_step_index_from_durations] No hay posiciones para obtener N.")
-        N = len(self.positions_history)
-        dtc = float(self.dt_control)
-        t = np.arange(N, dtype=float) * dtc
-
-        time_to_step, _, _, _ = self._build_step_time_maps_from_durations(N)
-        step_cont = time_to_step(t)
-        # Índice entero por muestra (k de cada tramo)
-        step_idx = np.floor(step_cont + 1e-12).astype(int)
-        return step_idx
-
-
     def plot_xyz_dual_x_from_step_durations(self, show: bool = True, save_path: str | None = None, separate: bool = True):
         """
         Plotea X, Y, Z con doble eje X:
@@ -682,86 +502,3 @@ class DroneVelocityEnv:
 
 
 
-
-"""
-    def plot_xyz_dual_x(self, show: bool = True, save_path: str | None = None, separate: bool = True):
-
-        if not self.positions_history:
-            print("[plot_xyz_dual_x] No hay datos para graficar.")
-            return
-
-        import numpy as np
-        import matplotlib.pyplot as plt
-        from matplotlib.ticker import MaxNLocator, FuncFormatter
-
-        P = np.vstack(self.positions_history)  # (N, 3)
-        
-        N = P.shape[0]
-
-        dtc = float(self.dt_control)
-        t = np.arange(N, dtype=float) * dtc
-
-        # Relación controles↔step y funciones de mapeo para el eje secundario
-        ctrls_per_step, dt_step = self._infer_step_params()
-
-        # Mapeos (continuos) entre tiempo y step (aprox lineal, suficiente para ticks correctos)
-        def time_to_step(x):
-            return x / dt_step
-
-        def step_to_time(s):
-            return s * dt_step
-
-        coord_labels = ["X [m]", "Y [m]", "Z [m]"]
-        coord_keys = ["x", "y", "z"]
-
-        if separate:
-            files = {}
-            for i, key in enumerate(coord_keys):
-                fig, ax = plt.subplots(figsize=(10, 4))
-                ax.plot(t, P[:, i], linewidth=1.8)
-                ax.set_xlabel("Tiempo [s]")
-                ax.set_ylabel(coord_labels[i])
-                ax.grid(True, alpha=0.6)
-
-                # Eje X secundario arriba con unidades de Step
-                secax = ax.secondary_xaxis('top', functions=(time_to_step, step_to_time))
-                secax.set_xlabel("Step [#]")
-                secax.xaxis.set_major_locator(MaxNLocator(integer=True))
-                secax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(round(v))}"))
-
-                ax.set_title(f"{coord_labels[i].split()[0]} vs Tiempo (eje superior: Step)")
-
-                if save_path:
-                    path_i = save_path.replace(".png", f"_{key}.png")
-                    fig.savefig(path_i, dpi=150, bbox_inches="tight")
-                    files[key] = path_i
-                if show:
-                    plt.show()
-                plt.close(fig)
-            return files if save_path else None
-
-        else:
-            fig, axes = plt.subplots(nrows=3, ncols=1, figsize=(10, 9), sharex=True)
-            for i, ax in enumerate(axes):
-                ax.plot(t, P[:, i], linewidth=1.8)
-                if i == 2:
-                    ax.set_xlabel("Tiempo [s]")
-                ax.set_ylabel(coord_labels[i])
-                ax.grid(True, alpha=0.6)
-
-                secax = ax.secondary_xaxis('top', functions=(time_to_step, step_to_time))
-                if i == 0:
-                    secax.set_xlabel("Step [#]")
-                secax.xaxis.set_major_locator(MaxNLocator(integer=True))
-                secax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(round(v))}"))
-
-            axes[0].set_title("Posición con doble eje X (Tiempo abajo, Step arriba)")
-            fig.tight_layout()
-
-            if save_path:
-                fig.savefig(save_path, dpi=150, bbox_inches="tight")
-            if show:
-                plt.show()
-            plt.close(fig)
-
-"""
