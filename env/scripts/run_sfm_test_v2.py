@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 import os
 import sys
+import time
 from pathlib import Path
 import numpy as np
 import matplotlib
@@ -26,8 +27,12 @@ from env.environment.gymnasium_env import DroneEnv
 # ========= Configuración =========
 SCENE = "simple_street_canyon_with_cars"
 DRONE_START = (0.0, 0.0, 10.0)
-MAX_STEPS = 1000
-FREQS_MHZ = [3500.0]
+
+#Semilla (seed) de la simulación
+SEMILLA = 0
+
+#Cantidad de agentes a generar aleatoriamente
+NUM_AGENTS = 10
 
 #Posiciones iniciales
 RX_POSITIONS = None
@@ -35,12 +40,15 @@ RX_POSITIONS = None
 #Metas de los receptores
 RX_GOALS = None
 
-#Cantidad de agentes a generar aleatoriamente
-NUM_AGENTS = 10
+#Máximo de pasos para la simulación (N° de steps de la simulación)
+MAX_STEPS = 1000
+
+#Frecuencias de la simulación
+FREQS_MHZ = [3500.0]
 
 # Carpeta de salida
 RUN_TAG = datetime.now().strftime("%Y%m%d-%H%M%S")
-OUT_DIR = Path(project_root) / "Pruebas SFM Slicer" / f"SFM_{RUN_TAG}_{SCENE}_{MAX_STEPS} steps"
+OUT_DIR = Path(project_root) / "Pruebas SFM Slicer" / f"SFM_{RUN_TAG}_{SCENE}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -83,7 +91,7 @@ def _get_rx_positions_xyz(rt):
 
 
 # === 1. PLOT ESTÁTICO (FINAL: Con etiquetas de texto) ===
-def plot_trajectories_xy_xz(tracks, obstacles, scene_bounds, out_path, freq_mhz, num_agents):
+def plot_trajectories_xy_xz(tracks, obstacles, scene_bounds, out_path, freq_mhz, num_agents, seed):
     drone = tracks["drone"]
     ues = tracks["ues"]
     T = ues.shape[0]
@@ -98,7 +106,7 @@ def plot_trajectories_xy_xz(tracks, obstacles, scene_bounds, out_path, freq_mhz,
     ax_xz = fig.add_subplot(gs[1, 0])
 
     # --- PLANTA (XY) ---
-    ax_xy.set_title(f"SFM Slicer {freq_mhz:.0f} MHz - {num_agents} Agentes ({T} pasos) — Planta (XY)",
+    ax_xy.set_title(f"Escenario: {SCENE}\nFrecuencia: {freq_mhz:.0f} MHz | {num_agents} Agentes | Semilla N° {seed} ({T} pasos)",
                     pad=12, fontsize=14, weight='bold')
     ax_xy.set_xlabel("X [m]", fontsize=12)
     ax_xy.set_ylabel("Y [m]", fontsize=12)
@@ -151,7 +159,7 @@ def plot_trajectories_xy_xz(tracks, obstacles, scene_bounds, out_path, freq_mhz,
             ax_xy.text(traj[0, 0] + 1.5, traj[0, 1] + 1.5, rx_labels[i], fontsize=11, weight="bold", color=c, zorder=5)
 
     # --- PERFIL (XZ) (CAMBIO: INICIO CÍRCULO / FIN CUADRADO) ---
-    ax_xz.set_title("Perfil XZ (Elevación)", pad=10, fontsize=14, weight='bold')
+    ax_xz.set_title("Perfil de Elevación (XZ)", pad=10, fontsize=14, weight='bold')
     ax_xz.set_xlabel("X [m]", fontsize=12)
     ax_xz.set_ylabel("Z [m]", fontsize=12)
     ax_xz.grid(True, ls="--", alpha=0.35)
@@ -204,7 +212,8 @@ def make_gif(tracks, obstacles, scene_bounds, out_path, fps=20):
     ax.set_aspect('equal')
     ax.set_xlabel("X [m]")
     ax.set_ylabel("Y [m]")
-    ax.set_title(f"Simulación Dinámica: (Sionna + SocialForce) - {N} Agentes ({T} pasos)")
+    ax.set_title(f"Simulación Dinámica (Sionna + SocialForce)\nEscenario: {SCENE} | {N} Agentes | Semilla N° {SEMILLA} ({T} pasos)",
+                 pad=12, fontsize=14, weight='bold')
     ax.grid(True, alpha=0.3)
 
     if obstacles:
@@ -279,8 +288,6 @@ def make_gif(tracks, obstacles, scene_bounds, out_path, fps=20):
 def run_episode(freq_mhz: float) -> dict:
     print(f"--- Iniciando Episodio {freq_mhz} MHz ---")
 
-    #Obligar al SpawnManager a usar siempre los mismos números para debug
-    np.random.seed(0)
 
     env = DroneEnv(
         render_mode=None,
@@ -297,7 +304,8 @@ def run_episode(freq_mhz: float) -> dict:
     # 1. Recuperar límites de la escena para visualización correcta
     scene_bounds = env.scene_bounds
 
-    obs, info = env.reset(seed=0)
+    #Obligar al SpawnManager a usar siempre los mismos números para debug
+    obs, info = env.reset(seed=SEMILLA)
 
     #2. Extraer obstáculos
     try:
@@ -318,7 +326,7 @@ def run_episode(freq_mhz: float) -> dict:
     drone_traj, ue_traj, steps = [], [], []
 
     # Imagen de referencia (Mapa de calor)
-    out_img = OUT_DIR / f"radio_map_{SCENE}_{MAX_STEPS} steps.png"
+    out_img = OUT_DIR / f"radio_map_{SCENE}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.png"
     if not out_img.exists():
         env.rt.render_scene_to_file(filename=str(out_img), with_radio_map=True)
 
@@ -327,7 +335,7 @@ def run_episode(freq_mhz: float) -> dict:
 
     # DEBUG: Verificamos posición inicial
     first_pos = _get_rx_positions_xyz(env.rt)
-    print(f"[DEBUG] Posiciones iniciales leídas por el visualizador:\n{first_pos}")
+    print(f"[DEBUG] Posiciones iniciales leídas por el visualizador (Seed {SEMILLA}):\n{first_pos}")
 
     while t < MAX_STEPS:
         # Guardar posiciones
@@ -355,6 +363,8 @@ def run_episode(freq_mhz: float) -> dict:
 
 
 def main():
+    start_time = time.perf_counter()
+
     print(f"[INFO] Guardando resultados en: {OUT_DIR}")
 
     for f in FREQS_MHZ:
@@ -364,18 +374,21 @@ def main():
         bounds = r["bounds"]
 
         # 1. Plot Estático
-        out_traj = OUT_DIR / f"traj_static_{SCENE}_{MAX_STEPS} steps_{int(f)} MHz.png"
+        out_traj = OUT_DIR / f"traj_static_{SCENE}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.png"
         plot_trajectories_xy_xz(tracks, obstacles, bounds, out_path=out_traj,
-                                freq_mhz=f, num_agents=NUM_AGENTS)
+                                freq_mhz=f, num_agents=NUM_AGENTS, seed=SEMILLA)
         print(f"Imagen guardada: {out_traj}")
 
         # 2. GIF
-        out_gif = OUT_DIR / f"animacion_{SCENE}_{MAX_STEPS} steps_{int(f)} MHz.gif"
+        out_gif = OUT_DIR / f"animacion_{SCENE}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.gif"
         print("Generando GIF...")
         make_gif(tracks, obstacles, bounds, out_path=out_gif)
         print(f"GIF guardado: {out_gif}")
 
     print(f"[DONE] Pruebas finalizadas.")
+
+    elapsed = time.perf_counter() - start_time
+    print(f"Tiempo total transcurrido: {elapsed:.3f} s ({elapsed / 60:.2f} min)")
 
 
 if __name__ == "__main__":
