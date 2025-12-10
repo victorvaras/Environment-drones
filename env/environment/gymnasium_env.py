@@ -19,6 +19,7 @@ if str(project_root) not in sys.path:
 from .sionnaEnv import SionnaRT
 from .dron import Dron
 from .receptores import ReceptoresManager, Receptor
+from env.environment.droneVelocityEnv import DroneVelocityEnv, DroneVelocityEnvConfig
 from .spawn_manager import SpawnManager
 from .receptores_mobility import ReceptorMobilityManager
 
@@ -40,6 +41,9 @@ class DroneEnv(gym.Env):
             render_mode: str | None = None,
             drone_start: tuple[float, float, float] = (0.0, 0.0, 20.0),
             run_metrics: bool = False
+
+            mode_set_vuelo: int = 7,
+            step_durations: float = 0.1,
 
     ):
         super().__init__()
@@ -140,8 +144,39 @@ class DroneEnv(gym.Env):
         )
         self.dron.bounds = scene_bounds
 
-        #Variables de Renderizado
-        self._init_render_vars()
+
+        #Inicializacion para movimiento de dron realista
+        self.mode_set_vuelo = mode_set_vuelo  
+
+        cfg = DroneVelocityEnvConfig(
+            start_xyz=self._start,
+            start_rpy=(0.0, 0.0, 0.0),
+            control_hz=120,
+            physics_hz=240,
+            mode=self.mode_set_vuelo,
+            render=False,
+            drone_model="cf2x",
+            seed=42,
+            record_trajectory=True,
+        )
+
+        self.step_durations = step_durations
+
+        self.dron_Realista = DroneVelocityEnv(
+            cfg = cfg,
+            step_durations = self.step_durations)
+
+        # Estado de render
+        self._fig = None
+        self._ax = None
+        self._canvas = None
+        self._ax_map = None
+        self._ax_list = None
+        self._ax_table = None
+        self._sc_rx = None
+        self._sc_drone = None
+        self._cbar = None
+        self._name_texts = []
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         #Reinicia el entorno a su estado inicial para un nuevo episodio.
@@ -150,10 +185,7 @@ class DroneEnv(gym.Env):
 
         #Reinicio del Dron y TX
         self.dron = Dron(start_xyz=self._start, bounds=self.scene_bounds)
-
-        #Sincronización con Sionna
-        #Se mueve el transmisor a la posición inicial para que el cálculo sea correcto desde t=0
-        self.rt.move_tx(self.dron.pos)
+        self.rt.move_tx(self.dron.pos, (0.0, 0.0, 0.0))
 
         #Renicio de receptores (Manager)
         #El Manager se encarga de: Spawn, Metas, SFM Reset
@@ -181,6 +213,17 @@ class DroneEnv(gym.Env):
         self._last_ue_metrics = []
         self.num_ut = self.receptores.n
 
+        self.dron_Realista.reset()
+
+        # 1) Número de UEs (receptores)
+        try:
+            self.num_ut = int(self.receptores.positions_xyz().shape[0])
+        except Exception:
+            # Fallback si tu contenedor expone otra API
+            self.num_ut = int(getattr(self.receptores, "num", getattr(self.receptores, "n", 0)))
+
+        
+
         return obs, info
 
     def step(self, action: np.ndarray):
@@ -189,13 +232,27 @@ class DroneEnv(gym.Env):
         """
         self.step_count += 1
 
-        #1.Movimiento del Dron
-        self.dron.step_delta(action)
-        self.rt.move_tx(self.dron.pos)
+        # Movimiento del dron
+        #self.dron.step_delta(action)
+        #self.rt.move_tx(self.dron.pos)
 
-        #2.Movimiento de Receptores
-        #SFM + Control Reactivo + Doppler + Validación
-        self.mobility_manager.step(dt=0.1)
+        
+        movimiento_normalizado = self.dron_Realista.step_move(action, dt=0.1)
+        movimiento_valido = self.rt.is_move_valid(self.rt.tx.position, movimiento_normalizado )
+        drone_velocity_mps = self.dron_Realista.get_velocity()
+          
+        self.rt.move_tx(movimiento_normalizado, drone_velocity_mps)       
+
+        
+
+        # Movimiento de personas
+        #Movimiento de personas o receptores
+        if actionR is None:
+            actionR = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+            
+        rx_positions = self.receptores.step_all(actionR) #Se llama al metodo que se encarga de mover a los receptores
+        for rx, pos in zip(self.rt.rx_list, rx_positions):
+            rx.position = [float(pos[0]), float(pos[1]), float(pos[2])]
 
         #3.Métricas y Sionna SYS
         info = self._get_metrics_info()
@@ -207,8 +264,13 @@ class DroneEnv(gym.Env):
         #Observación
         obs = np.concatenate([self.dron.pos]).astype(np.float32)
 
-        #Terminación
-        terminated = False
+        # --- Terminación ---
+        #movimiento_valido = True
+        if (movimiento_valido):
+            terminated = False
+        else:
+            terminated = True
+
         truncated = self.step_count >= self.max_steps
 
         #Renderizado

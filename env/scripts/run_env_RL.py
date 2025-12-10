@@ -28,7 +28,7 @@ RX_POSITIONS = [
     (  50.0,    0.0, 1.5),
     (90, -55, 1.5),
 ]
-MAX_STEPS = 100
+MAX_STEPS = 10
 
 
 if __name__ == "__main__":
@@ -46,7 +46,7 @@ if __name__ == "__main__":
     done, trunc = False, False
 
     while not (done or trunc):
-        a = [0, 0, 0]
+        a = [4, 0, 0]
         b = [0, 0, 0]
         obs, rew, done, trunc, info = env.step(a,b)
 

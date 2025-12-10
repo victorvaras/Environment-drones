@@ -43,21 +43,16 @@ from env.environment.gymnasium_env import DroneEnv  # adapta si tu ruta difiere
 SCENE = "simple_street_canyon_with_cars"  # p.ej. "santiago.xml", "munich"
 DRONE_START = (0.0, 0.0, 10.0)
 
-#Semilla (seed) de la simulación
 SEMILLA = 0
-
+#Semilla (seed) de la simulación
 #Cantidad de agentes a generar aleatoriamente
 NUM_AGENTS = 10
-
 #Posiciones iniciales
 RX_POSITIONS = None
-
 #Metas de los receptores
 RX_GOALS = None
-
 #Máximo de pasos para la simulación (N° de steps de la simulación)
 MAX_STEPS = 1000
-
 #Frecuencias de la simulación
 FREQS_MHZ = [3500.0]
 FREQ_LABELS = [f"{f:.0f} MHz" for f in FREQS_MHZ]
@@ -425,8 +420,8 @@ def run_episode(freq_mhz: float) -> dict:
         ue_traj.append(_get_rx_positions_xyz(env.rt).copy())
         steps.append(t)
 
-        # Step (Dron quieto)
-        obs, rew, done, trunc, info = env.step(np.array([0, 0, 0]))
+        a = [5, 0, 0]
+        b = [0, 0, 0]
 
         # Recolección Métricas
         ue_metrics_step = info.get("ue_metrics", [])
