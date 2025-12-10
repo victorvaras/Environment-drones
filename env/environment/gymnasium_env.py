@@ -16,6 +16,7 @@ if str(project_root) not in sys.path:
 from .sionnaEnv import SionnaRT
 from .dron import Dron
 from .receptores import ReceptoresManager, Receptor
+from env.environment.droneVelocityEnv import DroneVelocityEnv, DroneVelocityEnvConfig
 
 
 class DroneEnv(gym.Env):
@@ -33,6 +34,9 @@ class DroneEnv(gym.Env):
             max_steps: int = 400,
             render_mode: str | None = None,
             drone_start: tuple[float, float, float] = (0.0, 0.0, 20.0),
+
+            mode_set_vuelo: int = 7,
+            step_durations: float = 0.1,
 
     ):
         super().__init__()
@@ -81,6 +85,28 @@ class DroneEnv(gym.Env):
         )
         self.dron.bounds = bounds
 
+
+        #Inicializacion para movimiento de dron realista
+        self.mode_set_vuelo = mode_set_vuelo  
+
+        cfg = DroneVelocityEnvConfig(
+            start_xyz=self._start,
+            start_rpy=(0.0, 0.0, 0.0),
+            control_hz=120,
+            physics_hz=240,
+            mode=self.mode_set_vuelo,
+            render=False,
+            drone_model="cf2x",
+            seed=42,
+            record_trajectory=True,
+        )
+
+        self.step_durations = step_durations
+
+        self.dron_Realista = DroneVelocityEnv(
+            cfg = cfg,
+            step_durations = self.step_durations)
+
         # Estado de render
         self._fig = None
         self._ax = None
@@ -104,7 +130,7 @@ class DroneEnv(gym.Env):
         self.step_count = 0
 
         self.dron = Dron(start_xyz=self._start, bounds=self.scene_bounds)
-        self.rt.move_tx(self.dron.pos)
+        self.rt.move_tx(self.dron.pos, (0.0, 0.0, 0.0))
 
         obs = np.concatenate([self.dron.pos]).astype(np.float32)
         info = {}
@@ -124,6 +150,8 @@ class DroneEnv(gym.Env):
 
         self._last_ue_metrics = []
 
+        self.dron_Realista.reset()
+
         # 1) Número de UEs (receptores)
         try:
             self.num_ut = int(self.receptores.positions_xyz().shape[0])
@@ -131,7 +159,7 @@ class DroneEnv(gym.Env):
             # Fallback si tu contenedor expone otra API
             self.num_ut = int(getattr(self.receptores, "num", getattr(self.receptores, "n", 0)))
 
-       
+        
 
         return obs, info
 
@@ -139,8 +167,17 @@ class DroneEnv(gym.Env):
         self.step_count += 1
 
         # Movimiento del dron
-        self.dron.step_delta(action)
-        self.rt.move_tx(self.dron.pos)
+        #self.dron.step_delta(action)
+        #self.rt.move_tx(self.dron.pos)
+
+        
+        movimiento_normalizado = self.dron_Realista.step_move(action, dt=0.1)
+        movimiento_valido = self.rt.is_move_valid(self.rt.tx.position, movimiento_normalizado )
+        drone_velocity_mps = self.dron_Realista.get_velocity()
+          
+        self.rt.move_tx(movimiento_normalizado, drone_velocity_mps)       
+
+        
 
         # Movimiento de personas
         #Movimiento de personas o receptores
@@ -164,7 +201,12 @@ class DroneEnv(gym.Env):
         obs = np.concatenate([self.dron.pos]).astype(np.float32)
 
         # --- Terminación ---
-        terminated = False
+        #movimiento_valido = True
+        if (movimiento_valido):
+            terminated = False
+        else:
+            terminated = True
+
         truncated = self.step_count >= self.max_steps
 
         info = {

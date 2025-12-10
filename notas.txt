@@ -6,3 +6,14 @@ Escenario ideal seria usar 3 antenas en 120grados c/u para dirigir la emision de
 
 
 El movimiento del dron tiene que ser representado con inclinaciones inclusive al desplazarse
+
+
+documentacion gymnasium: https://gymnasium.farama.org/
+
+proyecto de dron con gymnasium: https://taijunjet.com/PyFlyt/index.html
+
+documentacion sionna: https://nvlabs.github.io/sionna/
+
+
+
+
