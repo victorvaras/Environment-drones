@@ -7,6 +7,7 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  #0 = all, 1 = info, 2 = warnings, 3 = 
 
 # === Bootstrap sys.path a la raíz del proyecto (dos niveles arriba) ===
 import sys
+import time
 from pathlib import Path
 project_root = Path(__file__).resolve().parents[2]
 if str(project_root) not in sys.path:
@@ -39,6 +40,14 @@ from env.environment.gymnasium_env import DroneEnv  # adapta si tu ruta difiere
 # ========= Configuración =========
 SCENE = "simple_street_canyon"  # p.ej. "santiago.xml", "munich" "simple_street_canyon"
 DRONE_START = (-85.0, 0.0, 20.0)
+
+#Semilla (seed) de la simulación
+SEMILLA = 0
+
+#Cantidad de agentes a generar aleatoriamente
+NUM_AGENTS = 10
+
+#Posiciones iniciales
 RX_POSITIONS = [
     #(-50.0, 0.0, 1.5),
     (-80.0,    -55.0, 1.5),    
@@ -49,10 +58,27 @@ RX_POSITIONS = [
     #(0.0,   30.0, 1.5),
     #(0.0,  -30.0, 1.5),
     #(80.0,   40.0, 1.5),
-    
-
 ]
-MAX_STEPS = 50
+
+#Metas de los receptores
+RX_GOALS = None
+"""
+[
+    #(-50.0, 0.0, 1.5),
+    (-80.0,    -55.0, 1.5),    
+    (20.0, -30.0, 1.5),
+    (50.0, 0.0, 1.5),
+    #(-20.0, 0.0, 1.5),
+    #(-1.0, 0.0, 1.5),
+    #(0.0,   30.0, 1.5),
+    #(0.0,  -30.0, 1.5),
+    #(80.0,   40.0, 1.5),
+]
+"""
+
+
+#Máximo de pasos para la simulación (N° de steps de la simulación)
+MAX_STEPS = 200
 
 # Compara dos frecuencias (en MHz). Cambia a lo que necesites.
 FREQS_MHZ = [3500.0] #28000
@@ -1418,14 +1444,33 @@ def run_episode(freq_mhz: float) -> dict:
         scene_name=SCENE,
         max_steps=MAX_STEPS,
         drone_start=DRONE_START,
-        rx_positions=RX_POSITIONS if RX_POSITIONS else None,
+        rx_positions=RX_POSITIONS,
+        rx_goals=RX_GOALS,
+        num_agents=NUM_AGENTS,
         antenna_mode="SECTOR3_3GPP",  # "ISO" o "SECTOR3_3GPP"
         frequency_mhz=freq_mhz,
         mode_set_vuelo=mode_set_vuelo,
+        run_metrics=True
     )
 
-    obs, info = env.reset(seed=0)
+    #Recuperar límites
+    scene_bounds = env.scene_bounds
+
+    # Reset con Semilla
+    obs, info = env.reset(seed=SEMILLA)
     done = trunc = False
+
+    #Extraer obstáculos para visualización
+    try:
+        if hasattr(env, "mobility_manager") and env.mobility_manager.sfm_sim:
+            sfm_obstacles_torch = env.mobility_manager.sfm_sim.ped_space.space
+        elif hasattr(env, "sfm_sim") and env.sfm_sim:
+            sfm_obstacles_torch = env.sfm_sim.ped_space.space
+        else:
+            sfm_obstacles_torch = []
+        obstacles_np = [o.numpy() for o in sfm_obstacles_torch]
+    except Exception:
+        obstacles_np = []
 
     steps_ue_metrics, steps_tbler_running = [], []
     drone_traj, ue_traj, steps = [], [], []
@@ -1450,8 +1495,14 @@ def run_episode(freq_mhz: float) -> dict:
 
         ue_metrics_step = info.get("ue_metrics", [])
         tbler_running   = info.get("tbler_running_per_ue", None)
-        steps_ue_metrics.append([dict(m) for m in ue_metrics_step])
-        steps_tbler_running.append(list(tbler_running) if tbler_running is not None else [np.nan]*len(ue_metrics_step))
+
+        #Guardado robusto (por si llega vacío)
+        if ue_metrics_step:
+            steps_ue_metrics.append([dict(m) for m in ue_metrics_step])
+        else:
+            steps_ue_metrics.append([])
+
+        steps_tbler_running.append(list(tbler_running) if tbler_running is not None else [np.nan]*NUM_AGENTS)
 
         t += 1
 
@@ -1476,6 +1527,8 @@ def run_episode(freq_mhz: float) -> dict:
         "freq_mhz": freq_mhz,
         "steps_ue_metrics": steps_ue_metrics,
         "steps_tbler_running": steps_tbler_running,
+        "obstacles": obstacles_np,
+        "bounds": scene_bounds,
         "tracks": {
             "drone": np.vstack(drone_traj),
             "ues":   np.stack(ue_traj, axis=0),
@@ -1530,6 +1583,7 @@ def save_movement_summary_txt(
 
 
 def main():
+    start_time = time.perf_counter()
     print(f"[INFO] Guardando resultados en: {OUT_DIR}")
 
     
@@ -1592,6 +1646,9 @@ def main():
 
 
     print(f"[DONE] Imágenes en: {OUT_DIR}")
+
+    elapsed = time.perf_counter() - start_time
+    print(f"Tiempo total transcurrido: {elapsed:.3f} s ({elapsed / 60:.2f} min)")
 
 
 if __name__ == "__main__":
