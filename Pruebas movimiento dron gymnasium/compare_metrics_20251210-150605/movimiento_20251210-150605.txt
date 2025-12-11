@@ -1,0 +1,17 @@
+===== RESUMEN DE MOVIMIENTO =====
+Generado: 2025-12-10 15:07:04
+Archivo: movimiento_20251210-150605.txt
+
+=== Configuración global ===
+Escena: simple_street_canyon
+Frecuencias usadas: 3500 MHz
+Posición inicial del dron [x,y,z] (m): (-85.0, 0.0, 20.0)
+Receptores (UEs) definidos: 3
+Max steps: 50
+
+=== Movimiento ===
+Modo de movimiento: Mode 
+Tipo de movimiento: Velocidad fija de [vx: 5.0, vy: 0.0, vz: 10 metros] m/s
+Velocidades usadas:
+Velocidad por defecto, maxima por eje 10m/s
+Velocidad por defecto, minima por eje -10m/s

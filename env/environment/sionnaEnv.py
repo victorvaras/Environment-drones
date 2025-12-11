@@ -61,7 +61,7 @@ def _resolve_scene_path(scene_id: str) -> str | None:
             return str(xml)
 
     # Buscar en Mapas-pruebas/
-    base_maps = Path(__file__).resolve().parents[2] / "Mapas-pruebas"
+    base_maps = Path(__file__).resolve().parents[2] / "Mapas-Sionna"
     # Si ya viene con extensión (ej: plaza.glb), lo busca directo
     cand_file = base_maps / scene_id
     if cand_file.exists():
@@ -231,7 +231,7 @@ class SionnaRT:
                  tx_array_cols: int = 1,          # Nº de columnas de la matriz TX
                  tx_array_v_spacing: float = 0.5, # Separación vertical (en λ)
                  tx_array_h_spacing: float = 0.5, # Separación horizontal (en λ)
-                 tx_array_pattern: str = "iso",   # "iso","dipole","tr38901", etc.
+                 tx_array_pattern: str = "tr38901",   # "iso","dipole","tr38901", etc.
                  tx_array_polarization: str = "VH",# "V","H","VH" (dual)
 
                  # --- antenas RX (matriz global de la escena) ---
@@ -415,14 +415,6 @@ class SionnaRT:
 
         self.scene = scene
         self.scene.frequency = self.freq_hz
-
-        # 🔹 Aseguramos acceso al objeto Mitsuba (para ray_test y shapes)
-        if hasattr(self.scene, "mi_scene"):
-            self.mi_scene = self.scene.mi_scene
-        else:
-            # Algunas escenas (XML) ya son Mitsuba directamente
-            self.mi_scene = self.scene
-
         pmin, pmax = self.scene_bounds_xyz()
 
         # 🔹 Guardamos los límites de la escena para que DroneEnv pueda usarlos
@@ -450,7 +442,8 @@ class SionnaRT:
             num_cols=self.rx_array_cols,
             vertical_spacing=self.rx_array_v_spacing,
             horizontal_spacing=self.rx_array_h_spacing,
-            pattern=self.rx_array_pattern, polarization=self.rx_array_polarization
+            pattern= self.rx_array_pattern, 
+            polarization= self.rx_array_polarization
         )
 
         # Precoder/combiner off si existen
@@ -462,12 +455,12 @@ class SionnaRT:
         self._solver = PathSolver()
 
         # Transmisores según modo
-        self._create_transmitters()
+        self._create_transmitters()        
 
         # Sanity
         assert self.scene is not None and self._solver is not None and self.tx is not None, \
             "Sionna RT no quedó inicializado correctamente."
-
+    
     def _create_transmitters(self):
         """
         Crea SIEMPRE 1 TX y lo añade a la escena.
@@ -504,6 +497,12 @@ class SionnaRT:
         tx.velocity = self.tx_velocities
         #tx.velocity = [0,0,0]
 
+        try:
+            tx.array = self._tx_array
+            i=1
+        except Exception:
+            pass
+
         # Añade a escena y guarda referencias
         self.scene.add(tx)
         self.txs.append(tx)
@@ -522,16 +521,25 @@ class SionnaRT:
                           display_radius=1.5, color=(0, 0, 0),
                           velocity = [0, 0, 0]
                           )
+            
+            # 🔴 ASOCIAR ARRAY **POR NODO**
+            try:
+                rx.array = self._rx_array
+                i=1
+            except Exception:
+                pass
+
             self.scene.add(rx)
             self.rx_list.append(rx)
 
-    def move_tx(self, pos_xyz):
+    def move_tx(self, pos_xyz, drone_velocity_mps):
         """Mueve TODOS los TX (1 o 3) a la misma posición del dron."""
         assert self.txs, "TX no inicializados."
         pos = [float(pos_xyz[0]), float(pos_xyz[1]), float(pos_xyz[2])]
+        #drone_velocity_mps =  (5.0, 5.0, 0.0)
         for tx in self.txs:
             tx.position = pos
-        # Mantiene orientaciones según el modo (no se recalculan aquí)
+            tx.velocity = drone_velocity_mps
 
 
 
@@ -547,7 +555,7 @@ class SionnaRT:
         bb = mi_scene.bbox()                      # mi.BoundingBox3f  (min, max)
 
         pmin = np.array([float(bb.min.x), float(bb.min.y), float(bb.min.z)], dtype=float)
-        pmax = np.array([float(bb.max.x), float(bb.max.y), float(bb.max.z)], dtype=float)
+        pmax = np.array([float(bb.max.x), float(bb.max.y), float(bb.max.z*2)], dtype=float)
         return pmin, pmax
 
     # ---- Cálculo de paths y métricas ----
@@ -1155,26 +1163,32 @@ class SionnaRT:
         ratio = np.maximum(d / float(d0), 1e-12)  # evita log10(0)
         prx_dbm = Pt_dBm + K_dB - 10.0 * float(gamma) * np.log10(ratio)
         return np.asarray(prx_dbm, dtype=float).reshape(-1)
+    
 
-    # ============================================================
-    # 🔹 Validación de movimiento sin colisión (receptores)
-    # ============================================================
+
+
+
+    # validar si un movimiento A->B es válido (sin colisiones)
     @staticmethod
-    def _np3_receptores(p):
+    def _np3(p):
         import numpy as np
-        a = np.asarray(p, dtype=np.float32).reshape(-1)
+        a = np.asarray(p, dtype=float).reshape(-1)
         if a.size != 3:
-            raise ValueError("Se esperaban 3 componentes [x, y, z].")
+            raise ValueError("Se esperaban 3 componentes [x,y,z].")
         return a
 
-    def is_move_valid_receptores(
-            self,
-            a, b,
-            radius: float = 0.30,
-            n_offsets: int = 12,
-            eps: float = 1e-3,
-            check_bounds: bool = True
+    def is_move_valid(
+        self,
+        a, b,
+        radius: float = 0.30,   # radio del dron (m)
+        n_offsets: int = 12,    # muestreo lateral alrededor del eje (0 = solo línea central)
+        eps: float = 1e-3,      # margen numérico para evitar autointersección
+        check_bounds: bool = True
     ) -> bool:
+        """
+        Devuelve True si el tramo A->B está libre de colisiones (considerando un "tubo" de radio 'radius').
+        Devuelve False si hay intersección con la geometría o si B está fuera de bounds (si check_bounds=True).
+        """
         import numpy as np
         import mitsuba as mi
         import drjit as dr
@@ -1182,52 +1196,48 @@ class SionnaRT:
         if self.scene is None:
             raise RuntimeError("SionnaRT: scene no está construida. Llama build_scene() antes.")
 
-        # --- Normalizar puntos A y B ---
-        a = self._np3_receptores(a)
-        b = self._np3_receptores(b)
+        a = self._np3(a); b = self._np3(b)
         d = b - a
         L = float(np.linalg.norm(d))
         if L <= 1e-9:
-            return True  # No hay desplazamiento real
+            return True  # no hay movimiento efectivo
 
-        # --- Chequeo de límites ---
+        # Chequeo de límites (si se pide)
+        check_bounds = False
         if check_bounds:
             if getattr(self, "scene_bounds", None) is not None:
                 pmin, pmax = self.scene_bounds
             else:
                 pmin, pmax = self.scene_bounds_xyz()
-            pmin = np.asarray(pmin, dtype=np.float32)
-            pmax = np.asarray(pmax, dtype=np.float32)
+            pmin = np.asarray(pmin, dtype=float); pmax = np.asarray(pmax, dtype=float)
             if np.any(b < (pmin - 1e-6)) or np.any(b > (pmax + 1e-6)):
                 return False
 
-        # --- Conversión a tipos Mitsuba ---
+        # Convertir a tipos Mitsuba
         a_mi = mi.Point3f(float(a[0]), float(a[1]), float(a[2]))
         b_mi = mi.Point3f(float(b[0]), float(b[1]), float(b[2]))
-        dirv = b_mi - a_mi
-        L_mi = dr.norm(dirv)
-        dirv = dirv / L_mi
+        dirv  = b_mi - a_mi
+        L_mi  = dr.norm(dirv)
+        dirv  = dirv / L_mi
 
-        # --- Base ortonormal perpendicular ---
+        # Base ortonormal perpendicular a la dirección
         up = mi.Vector3f(0.0, 0.0, 1.0)
         n1 = dr.normalize(dr.cross(dirv, up))
-        n1 = dr.select(dr.norm(n1) < 1e-6,
-                       dr.normalize(dr.cross(dirv, mi.Vector3f(0, 1, 0))),
-                       n1)
+        # Si casi paralelo a Z, usar otra referencia
+        n1 = dr.select(dr.norm(n1) < 1e-6, dr.normalize(dr.cross(dirv, mi.Vector3f(0, 1, 0))), n1)
         n2 = dr.normalize(dr.cross(dirv, n1))
 
-        # --- Offsets circulares ---
+        # Offsets circulares para aproximar el radio del dron
         offsets = [mi.Vector3f(0.0, 0.0, 0.0)]
         if radius > 0.0 and n_offsets > 0:
             for k in range(int(n_offsets)):
                 th = 2.0 * np.pi * (k / n_offsets)
                 offsets.append(radius * np.cos(th) * n1 + radius * np.sin(th) * n2)
 
-        mi_scene = getattr(self, "mi_scene", getattr(self.scene, "mi_scene", None))
-        if mi_scene is None:
-            raise RuntimeError("No hay escena Mitsuba activa (mi_scene=None)")
-
+        mi_scene = self.scene.mi_scene
         L_lim = float(L) - eps
+
+        # Si cualquier rayo choca, retornamos False
         for off in offsets:
             o = a_mi + off + eps * dirv
             ray = mi.Ray3f(o, dirv)
@@ -1235,109 +1245,6 @@ class SionnaRT:
             if mi_scene.ray_test(ray):
                 return False
 
+        # Ningún rayo intersectó
         return True
-
-    # ============================================================
-    # Escaner de la escena (Slicer / Ray-Casting)
-    # ============================================================
-    #Función que se encarga de hacer un escaner de la escena (desde el cielo)
-    #Con la finalidad de obtener o generar un "mapa de puntos"
-    def get_sfm_obstacles(self, grid_density: float = 0.4) -> list[np.ndarray]:
-        """
-        Escanea la geometría de la escena 3D utilizando Ray Tracing vertical para generar
-        un mapa de ocupación 2D preciso para la navegación peatonal.
-
-        Funcionamiento:
-        1. Genera una cuadrícula de puntos sobre toda la escena.
-        2. Lanza rayos desde arriba hacia abajo (eje -Z).
-        3. Filtra los impactos según la altura para distinguir 'suelo caminable' de 'obstáculos'.
-
-        Args:
-            grid_density (float): Resolución del escaneo en metros.
-
-        Returns:
-            list[np.ndarray]: Lista conteniendo un array (N, 2) con las coordenadas X,Y
-                              de todos los puntos detectados como obstáculos.
-        """
-        import numpy as np
-        import mitsuba as mi
-        import drjit as dr
-
-        #Se valida si es que la escena esta cargada
-        if self.scene is None or self.mi_scene is None:
-            raise RuntimeError("SionnaRT: La escena no está construida.")
-
-        print(f"[SionnaRT Slicer] Iniciando escaneo de escena (Densidad: {grid_density}m)")
-
-        #1.-Se define el área de escaneo
-        #Se obtienen los limites de toda la escena 3D de Sionna
-        bounds = self.mi_scene.bbox()
-
-        #Se añade un margen de +/- 2m con tal de asegurar cobertura total de la escena
-        min_x, min_y = bounds.min.x - 2.0, bounds.min.y - 2.0
-        max_x, max_y = bounds.max.x + 2.0, bounds.max.y + 2.0
-
-        #Se genera la cuadrícula de coordenadas con los puntos (X, Y) (Malla de puntos)
-        X = np.arange(min_x, max_x, grid_density, dtype=np.float32)
-        Y = np.arange(min_y, max_y, grid_density, dtype=np.float32)
-        grid_x, grid_y = np.meshgrid(X, Y)
-
-        #Se aplanan las matrices para tener listas lineales de coordenadas
-        flat_x = grid_x.flatten()
-        flat_y = grid_y.flatten()
-
-        #2.-Se configuran los rayos (Mitsuba / DrJit)
-        #Altura de origen: Se coloca el "agente" 5 metros por encima del objeto más alto
-        ray_origin_z = bounds.max.z + 5.0
-
-        #Conversión - mi.Float convierte el array de NumPy al formato nativo de Mitsuba (Float)
-        ox = mi.Float(flat_x)
-        oy = mi.Float(flat_y)
-
-        #'oz' es un escalar, pero DrJit realiza 'Broadcasting' automático.
-        #Con la finalidad de expandir este valor único para coincidan con la longitud de ox y oy
-        oz = mi.Float(ray_origin_z)
-
-        #Origen de los rayos: (x, y, z) (z = Alto)
-        origins_mi = mi.Point3f(ox, oy, oz)
-
-        #Dirección de los rayos: Hacia abajo (0, 0, -1)
-        dirs_mi = mi.Vector3f(0, 0, -1)
-
-        #Se crea el objeto Rayo vectorizado (contiene miles de rayos)
-        #Es un solo objeto que encapsula miles de rayos para cómputo paralelo.
-        rays = mi.Ray3f(origins_mi, dirs_mi)
-
-        #3. Intersección Masiva (Ray Tracing)
-        #Mitsuba procesará todos los rayos en paralelo
-        si = self.mi_scene.ray_intersect(rays)
-
-        #4. Filtrado de obstáculos (Slicer)
-        hit_z = si.p.z            #Coordenada Z donde golpeó el rayo (Altura del impacto).
-        is_valid = si.is_valid()  #Booleano: ¿Golpeó algo o se fue al vacío?
-
-        #Criterio de Obstáculos:
-        #-hit_z > 0.3: Se ignora el suelo (z = 0) y aceras o veredas muy bajas (< 30cm).
-        #-is_valid: Indica que golpeo algo (geometría).
-        #No se limita la altura máxima para detectar correctamente techos de edificios altos (u otros obstáculos altos).
-        is_obstacle = (hit_z > 0.3) & is_valid
-
-        #Transferencia de datos: De DrJit a NumPy
-        #Se convierte la máscara de DrJit a un array de NumPy
-        obstacle_mask_np = np.array(is_obstacle, dtype=bool)
-
-        #Se aplica la máscara para seleccionar solo las coordenadas X,Y que corresponden a obstáculos
-        obs_x = flat_x[obstacle_mask_np]
-        obs_y = flat_y[obstacle_mask_np]
-
-        #Se apilan en formato (N, 2) para API Socialforce
-        sfm_points = np.stack([obs_x, obs_y], axis=1)
-
-        print(f"[SionnaRT Slicer] Escaneo completado: {len(sfm_points)} puntos de obstáculo detectados.")
-
-        #Como la API Socialforce espera una lista de arrays (PedSpacePotential).
-        #Se le devuelve una lista con un solo gran array de puntos.
-        if len(sfm_points) > 0:
-            return [sfm_points]
-        else:
-            return []
+ 
