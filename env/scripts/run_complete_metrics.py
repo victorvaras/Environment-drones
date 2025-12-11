@@ -50,7 +50,9 @@ SEMILLA = 0
 NUM_AGENTS = 10
 
 #Posiciones iniciales
-RX_POSITIONS = [
+RX_POSITIONS = None
+"""
+[
     #(-50.0, 0.0, 1.5),
     (-80.0,    -55.0, 1.5),    
     (20.0, -30.0, 1.5),
@@ -61,6 +63,7 @@ RX_POSITIONS = [
     #(0.0,  -30.0, 1.5),
     #(80.0,   40.0, 1.5),
 ]
+"""
 
 #Metas de los receptores
 RX_GOALS = None
@@ -80,7 +83,7 @@ RX_GOALS = None
 
 
 #Máximo de pasos para la simulación (N° de steps de la simulación)
-MAX_STEPS = 200
+MAX_STEPS = 1000
 
 # Compara dos frecuencias (en MHz). Cambia a lo que necesites.
 FREQS_MHZ = [3500.0] #28000
@@ -88,27 +91,26 @@ FREQ_LABELS = [f"{f:.0f} MHz" for f in FREQS_MHZ]
 
 # Carpeta de salida con timestamp
 RUN_TAG = datetime.now().strftime("%Y%m%d-%H%M%S")
-#OUT_DIR = Path(project_root) / "Pruebas finales" / f"METRICS_{RUN_TAG}_{SCENE}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps"
-OUT_DIR = Path(project_root) / "Pruebas movimiento dron gymnasium" / f"compare_metrics_{RUN_TAG}"
+OUT_DIR = Path(project_root) / "Pruebas fusión" / f"METRICS_{RUN_TAG}_{SCENE}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OUT_DIR_RECEPTORS = OUT_DIR / "4- receptors-metrics"
-OUT_DIR_RECEPTORS.mkdir(parents=True, exist_ok=True)
-
-OUT_DIR_UE_METRICS = OUT_DIR / "6- metricas-por-usuario"
-OUT_DIR_UE_METRICS.mkdir(parents=True, exist_ok=True)
-
-OUT_DIR_UE_all_METRICS = OUT_DIR / "3- metricas-totales-por-usuario-y-frecuencia"
-OUT_DIR_UE_all_METRICS.mkdir(parents=True, exist_ok=True)
+OUT_DIR_MOV_DRONE = OUT_DIR / "1- trayectoria-dron"
+OUT_DIR_MOV_DRONE.mkdir(parents=True, exist_ok=True)
 
 OUT_DIR_FREQ_METRICS = OUT_DIR / "2- metricas-totales-por-frecuencia"
 OUT_DIR_FREQ_METRICS.mkdir(parents=True, exist_ok=True)
 
+OUT_DIR_UE_all_METRICS = OUT_DIR / "3- metricas-totales-por-usuario-y-frecuencia"
+OUT_DIR_UE_all_METRICS.mkdir(parents=True, exist_ok=True)
+
+OUT_DIR_RECEPTORS = OUT_DIR / "4- receptors-metrics"
+OUT_DIR_RECEPTORS.mkdir(parents=True, exist_ok=True)
+
 OUT_DIR_DOPPLER = OUT_DIR / "5- doppler-metrics"
 OUT_DIR_DOPPLER.mkdir(parents=True, exist_ok=True)
 
-OUT_DIR_MOV_DRONE = OUT_DIR / "1- trayectoria-dron"
-OUT_DIR_MOV_DRONE.mkdir(parents=True, exist_ok=True)
+OUT_DIR_UE_METRICS = OUT_DIR / "6- metricas-por-usuario"
+OUT_DIR_UE_METRICS.mkdir(parents=True, exist_ok=True)
 
 
 def _scalar_float(x):
