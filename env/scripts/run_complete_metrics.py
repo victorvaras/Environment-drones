@@ -41,7 +41,7 @@ from env.environment.gymnasium_env import DroneEnv  # adapta si tu ruta difiere
 
 # ========= Configuración =========
 SCENE = "simple_street_canyon"  # p.ej. "santiago.xml", "munich" "simple_street_canyon"
-DRONE_START = (-85.0, 0.0, 20.0)
+DRONE_START = (-85.0, 0.0, 15.0)
 
 #Semilla (seed) de la simulación
 SEMILLA = 0
@@ -50,9 +50,7 @@ SEMILLA = 0
 NUM_AGENTS = 10
 
 #Posiciones iniciales
-RX_POSITIONS = None
-"""
-[
+RX_POSITIONS = [
     #(-50.0, 0.0, 1.5),
     (-80.0,    -55.0, 1.5),    
     (20.0, -30.0, 1.5),
@@ -63,12 +61,10 @@ RX_POSITIONS = None
     #(0.0,  -30.0, 1.5),
     #(80.0,   40.0, 1.5),
 ]
-"""
+
 
 #Metas de los receptores
-RX_GOALS = None
-"""
-[
+RX_GOALS = [
     #(-50.0, 0.0, 1.5),
     (-80.0,    -55.0, 1.5),    
     (20.0, -30.0, 1.5),
@@ -79,11 +75,11 @@ RX_GOALS = None
     #(0.0,  -30.0, 1.5),
     #(80.0,   40.0, 1.5),
 ]
-"""
+
 
 
 #Máximo de pasos para la simulación (N° de steps de la simulación)
-MAX_STEPS = 1000
+MAX_STEPS = 100
 
 # Compara dos frecuencias (en MHz). Cambia a lo que necesites.
 FREQS_MHZ = [3500.0] #28000
@@ -287,8 +283,25 @@ def plot_trajectories_xy_xz(tracks, obstacles, scene_bounds, out_path, freq_mhz,
     ax_xz.grid(True, ls="--", alpha=0.35)
 
     ax_xz.set_xlim(ax_xy.get_xlim())
-    ax_xz.set_ylim(0, 18)
+
+
+    # ===== NUEVO: límites dinámicos en Z =====
+    drone_z = drone[:, 2]
+    ues_z   = ues[:, :, 2].reshape(-1)
+
+    z_min = float(np.min([np.min(drone_z), np.min(ues_z)]))
+    z_max = float(np.max([np.max(drone_z), np.max(ues_z)]))
+
+    # Aseguramos cierto rango mínimo y margen
+    span = max(z_max - z_min, 1.0)   # al menos 1 m de rango
+    margin = 0.05 * span
+
+    z_low  = max(0.0, 0.0)   # si quieres que nunca baje de 0
+    z_high = z_max + margin
+
+    ax_xz.set_ylim(z_low, z_high)
     ax_xz.set_aspect('auto')
+    # ===== FIN NUEVO =====
 
     # Dron
     ax_xz.plot(drone[:, 0], drone[:, 2], lw=3.0, label="Drone", color='tab:blue')
@@ -322,9 +335,20 @@ def plot_trajectories_xy_xz(tracks, obstacles, scene_bounds, out_path, freq_mhz,
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
 
+
+
 def make_gif(tracks, obstacles, scene_bounds, out_path, fps=20):
-    ues = tracks["ues"]
-    T, N, _ = ues.shape
+    # --- Datos de UEs y Drone ---
+    ues = tracks["ues"]          # shape: (T_ues, N, 3)
+    drone = tracks["drone"]      # shape: (T_drone, 3)
+
+    # Nos aseguramos de usar el mismo número de pasos para ambos
+    T_ues, N, _ = ues.shape
+    T_drone = drone.shape[0]
+    T = min(T_ues, T_drone)
+
+    ues = ues[:T]
+    drone = drone[:T]
 
     fig, ax = plt.subplots(figsize=(12, 12))
     fig.subplots_adjust(right=0.80)
@@ -332,21 +356,26 @@ def make_gif(tracks, obstacles, scene_bounds, out_path, fps=20):
     ax.set_aspect('equal')
     ax.set_xlabel("X [m]")
     ax.set_ylabel("Y [m]")
-    ax.set_title(f"Simulación Dinámica (Sionna + SocialForce)\nEscenario: {SCENE} | {N} Agentes | Semilla N° {SEMILLA} ({T} pasos)",
-                 pad=12, fontsize=14, weight='bold')
+    ax.set_title(
+        f"Simulación Dinámica (Sionna + SocialForce)\n"
+        f"Escenario: {SCENE} | {N} Agentes | Semilla N° {SEMILLA} ({T} pasos)",
+        pad=12, fontsize=14, weight='bold'
+    )
     ax.grid(True, alpha=0.3)
 
+    # --- Obstáculos ---
     if obstacles:
         obs_stack = np.vstack(obstacles)
         n_points = len(obs_stack)
         if n_points > 0:
             marker_size = 10000.0 / n_points
             marker_size = max(0.1, min(marker_size, 2.0))
+            ax.scatter(
+                obs_stack[:, 0], obs_stack[:, 1],
+                s=marker_size, c='black', marker='.', alpha=1.0
+            )
 
-            # Igualamos alpha a 0.6
-            ax.scatter(obs_stack[:, 0], obs_stack[:, 1],
-                       s=marker_size, c='black', marker='.', alpha=1.0)
-
+    # --- Límites de la escena ---
     if scene_bounds:
         (xmin, xmax) = scene_bounds[0]
         (ymin, ymax) = scene_bounds[1]
@@ -362,46 +391,95 @@ def make_gif(tracks, obstacles, scene_bounds, out_path, fps=20):
         ax.set_xlim(np.min(all_xy[:, 0]) - pad, np.max(all_xy[:, 0]) + pad)
         ax.set_ylim(np.min(all_xy[:, 1]) - pad, np.max(all_xy[:, 1]) + pad)
 
+    # --- Colores y objetos gráficos para UEs ---
     cmap = matplotlib.colormaps['tab10']
     colors = [cmap(i % 10) for i in range(N)]
 
-    start_pos = ues[0, :, :2]
-    scats = ax.scatter(start_pos[:, 0], start_pos[:, 1], s=100, c=colors, zorder=5, edgecolors='white')
-    trails = [ax.plot([], [], '-', lw=2, color=colors[i], alpha=0.6)[0] for i in range(N)]
+    start_pos_ues = ues[0, :, :2]
+    scats_ues = ax.scatter(
+        start_pos_ues[:, 0], start_pos_ues[:, 1],
+        s=100, c=colors, zorder=5, edgecolors='white'
+    )
+    trails_ues = [
+        ax.plot([], [], '-', lw=2, color=colors[i], alpha=0.6)[0]
+        for i in range(N)
+    ]
 
-    # Leyenda GIF
+    # --- Dron: scatter + trail ---
+    start_pos_drone = drone[0, :2]
+    drone_scat = ax.scatter(
+        [start_pos_drone[0]], [start_pos_drone[1]],
+        s=150, marker="^", color='tab:blue', edgecolors='k', zorder=6, label="Drone"
+    )
+    drone_trail = ax.plot(
+        [], [], '--', lw=2.5, color='tab:blue', alpha=0.9, zorder=5
+    )[0]
+
+    # --- Leyenda ---
     if N <= 15:
-        custom_lines = [Line2D([0], [0], color=colors[i], lw=2) for i in range(N)]
-        ax.legend(custom_lines, [f"UE{i}" for i in range(N)],
-                  loc='center left', bbox_to_anchor=(1.02, 0.5), title="Receptores")
+        ue_lines = [Line2D([0], [0], color=colors[i], lw=2) for i in range(N)]
+        labels_ues = [f"UE{i}" for i in range(N)]
+
+        legend_lines = [Line2D([0], [0], color='tab:blue', lw=2, linestyle='--', marker='^')] + ue_lines
+        legend_labels = ["Drone"] + labels_ues
+
+        ax.legend(
+            legend_lines, legend_labels,
+            loc='center left', bbox_to_anchor=(1.02, 0.5), title="Receptores"
+        )
     else:
-        ax.legend([scats], [f"{N} Agentes"], loc='center left', bbox_to_anchor=(1.02, 0.5))
+        # Si son muchos UEs, simplificamos la leyenda
+        legend_lines = [
+            Line2D([0], [0], color='tab:blue', lw=2, linestyle='--', marker='^'),
+            scats_ues
+        ]
+        legend_labels = ["Drone", f"{N} Agentes"]
+        ax.legend(
+            legend_lines, legend_labels,
+            loc='center left', bbox_to_anchor=(1.02, 0.5)
+        )
 
+    # --- Función de actualización para cada frame ---
     def update(frame):
-        current_pos = ues[frame, :, :2]
-        scats.set_offsets(current_pos)
-        start = max(0, frame - 30)
-        for i, trail in enumerate(trails):
-            trail.set_data(ues[start:frame + 1, i, 0], ues[start:frame + 1, i, 1])
-        return scats, *trails
+        # UEs
+        current_pos_ues = ues[frame, :, :2]
+        scats_ues.set_offsets(current_pos_ues)
 
-    # --- LÓGICA DE SEGURIDAD ADAPTATIVA ---
-    # Si T es pequeño (ej: 300), step_skip será 1 (sin saltos, fluido).
-    # Si T es gigante (ej: 10000), step_skip será alto (ej: 20) para no explotar.
+        start = max(0, frame - 30)
+        for i, trail in enumerate(trails_ues):
+            trail.set_data(
+                ues[start:frame + 1, i, 0],
+                ues[start:frame + 1, i, 1]
+            )
+
+        # Drone
+        current_pos_drone = drone[frame, :2]
+        drone_scat.set_offsets(current_pos_drone)
+        drone_trail.set_data(
+            drone[start:frame + 1, 0],
+            drone[start:frame + 1, 1]
+        )
+
+        return scats_ues, drone_scat, drone_trail, *trails_ues
+
+    # --- Lógica de seguridad (salteo de frames) ---
     TARGET_TOTAL_FRAMES = 250
 
     if T <= TARGET_TOTAL_FRAMES:
-        step_skip = 1  # Muestra TODOS los cuadros (Perfecto para escena simple)
+        step_skip = 1
     else:
-        step_skip = T // TARGET_TOTAL_FRAMES  # Salta para proteger RAM
+        step_skip = max(1, T // TARGET_TOTAL_FRAMES)
 
     print(f"[GIF] Generando animación con step_skip = {step_skip} (Total frames: {T // step_skip})")
 
     frames_idx = range(0, T, step_skip)
 
-    ani = animation.FuncAnimation(fig, update, frames=frames_idx, interval=50, blit=True)
+    ani = animation.FuncAnimation(
+        fig, update, frames=frames_idx, interval=50, blit=True
+    )
     ani.save(out_path, writer='pillow', fps=fps)
     plt.close(fig)
+
 
 
 def to_dataframe(run_dict: dict) -> pd.DataFrame:
@@ -1562,6 +1640,7 @@ def run_episode(freq_mhz: float) -> dict:
     env.rt.render_scene_to_file(filename=str(out_img), with_radio_map=True)
 
     t = 0
+    contador = 0
     while not (done or trunc):
         # snapshot antes del step
         drone_traj.append(_get_drone_xyz(env.rt).copy())
@@ -1587,6 +1666,14 @@ def run_episode(freq_mhz: float) -> dict:
         steps_tbler_running.append(list(tbler_running) if tbler_running is not None else [np.nan]*NUM_AGENTS)
 
         t += 1
+
+        """ Validacion para probar reset dentro del episodio
+        if (done or trunc) and contador == 0:
+            obs, info = env.reset(seed=SEMILLA + 1)
+            done = trunc = False
+            contador += 1
+
+        """
 
     # snapshot final
     drone_traj.append(_get_drone_xyz(env.rt).copy())
