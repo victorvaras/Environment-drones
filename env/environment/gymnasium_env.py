@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import datetime
-import socialforce
-import torch
-from socialforce import potentials
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
@@ -20,8 +17,7 @@ from .sionnaEnv import SionnaRT
 from .dron import Dron
 from .receptores import ReceptoresManager, Receptor
 from env.environment.droneVelocityEnv import DroneVelocityEnv, DroneVelocityEnvConfig
-from .spawn_manager import SpawnManager
-from .receptores_mobility import ReceptorMobilityManager
+
 
 class DroneEnv(gym.Env):
     """Entorno Gymnasium con Sionna RT (sin imagen de fondo)."""
@@ -30,8 +26,6 @@ class DroneEnv(gym.Env):
     def __init__(
             self,
             rx_positions: list[tuple[float, float, float]] | None = None,
-            rx_goals: list[tuple[float, float, float]] | None = None,
-            num_agents: int = 10,
             frequency_mhz: float = 3500.0,
             tx_power_dbm: float = 30.0,
             bandwidth_hz: float = 20e6,
@@ -40,7 +34,6 @@ class DroneEnv(gym.Env):
             max_steps: int = 400,
             render_mode: str | None = None,
             drone_start: tuple[float, float, float] = (0.0, 0.0, 20.0),
-            run_metrics: bool = False,
 
             mode_set_vuelo: int = 7,
             step_durations: float = 0.1,
@@ -54,95 +47,43 @@ class DroneEnv(gym.Env):
         self._start = drone_start
         self.max_steps = int(max_steps)
         self.step_count = 0
-        self.run_metrics = run_metrics
 
-        #1.Configuración de la Cantidad de receptores
-        #Si se le asignan posiciones de manera estática
-        if rx_positions is not None:
-            self.current_num_agents = len(rx_positions)
-            using_manual_spawn = True #Se utilizara de manera manual
-        else:
-            self.current_num_agents = num_agents
-            using_manual_spawn = False #Se utilizara el SpawnManager
+        # --- Iniciando receptores ---
+        self.receptores = ReceptoresManager([Receptor(*p) for p in rx_positions])
 
-        #Se guardan las referencias manuales para el reset
-        self._manual_rx_pos = rx_positions if using_manual_spawn else None
-        self._manual_rx_goals = rx_goals if using_manual_spawn else None
+        # --- Guardar número de receptores ---
+        numero_receptores = self.receptores.n
+        rx_velocities_mps = [(0.0, 0.0, 0.0) for _ in range(numero_receptores)]
 
-        #Se inicializan las Velocidades iniciales para el cálculo de Doppler
-        rx_velocities_mps = [(0.0, 0.0, 0.0) for _ in range(self.current_num_agents)]
 
-        #2.Sionna RT
+        # --- Iniciando Sionna RT ---
         self.rt = SionnaRT(
             antenna_mode=antenna_mode,
             frequency_mhz=frequency_mhz,
             # tx_power_dbm=tx_power_dbm,
             # bandwidth_hz=bandwidth_hz,
             scene_name=scene_name,
-            num_ut=self.current_num_agents,      #Se reserva memoria para N receptores
+            num_ut=numero_receptores,
             rx_velocities_mps=rx_velocities_mps,
         )
-        self.rt.build_scene() #Se construye la escena en Sionna
 
-        #3.Gestor de movilidad (Física y Navegación)
-        #Se inicializa el Manager pasandole los parámetros físicos
-        self.mobility_manager = ReceptorMobilityManager(
-            sionna_rt=self.rt,                                                   #Sionna
-            bounds_min=(self.rt.scene_bounds[0][0], self.rt.scene_bounds[0][1]), #Limites minimos de la escena
-            bounds_max=(self.rt.scene_bounds[1][0], self.rt.scene_bounds[1][1]), #Limites máximos de la escena
-            sfm_v0=5.0, sfm_sigma=0.5, sfm_u0=80.0, sfm_r=0.5                    #Parametros SFM
-        )
+        # --- Construir escena y colocar receptores ---
+        self.rt.build_scene()
+        self.rt.attach_receivers(self.receptores.positions_xyz())
 
-        #4.Extracción de Obstáculos (Slicer)
-        #Se extrae la geometría estática de Sionna una sola vez.
-        #Se utiliza la función 'get_sfm_obstacles'.
-        print(f"[Gym] Extrayendo obstáculos de la escena '{scene_name}'...")
+         
+        bounds_min = self.rt.scene_bounds[0]
+        bounds_max = self.rt.scene_bounds[1]
+        bounds = ((bounds_min[0], bounds_max[0]), (bounds_min[1], bounds_max[1]), (bounds_min[2], bounds_max[2]))
+        self.scene_bounds = bounds
 
-        #Lógica de Auto-Escalado (Auto-Scale) para densidad del scanner
-        #Se calcula el tamaño del mapa para decidir la densidad y proteger la RAM.
-        bounds = self.rt.mi_scene.bbox()
-        extent = max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y)
-
-        if extent > 1000.0:
-            gym_density = 1.5  #Escena Grande -> Menos resolución
-            print(f"[Gym] Escena Gigante ({extent:.0f}m). Ajustando densidad a: {gym_density}m")
-        elif extent > 500.0:
-            gym_density = 0.8  #Escena mediana
-            print(f"[Gym] Escena mediana ({extent:.0f}m). Ajustando densidad a: {gym_density}m")
-        else:
-            gym_density = 0.4  #Escena pequeña -> Alta precisión
-            print(f"[Gym] Escena pequeña o estándar ({extent:.0f}m). Usando alta precisión: {gym_density}m")
-
-        #Se utiliza el escaner para obtener los obstáculos para la API Socialforce (Slicer)
-        #grid_density = densidad calculada dinámicamente
-        obstacles_np = self.rt.get_sfm_obstacles(grid_density=gym_density)
-
-        #Se configura el manager con los obstáculos
-        self.mobility_manager.configure_obstacles(obstacles_np)
-
-        #Se inicializa self.receptores como None (se le asigna valor en reset)
-        self.receptores = None
-
-        #5.Configuración Final del Entorno (Bounds, Spaces, Rendering)
-        #Bounds y Dron
-        #Se definen los límites del espacio de acción y observación para RL
-        scene_bounds = ((self.rt.scene_bounds[0][0], self.rt.scene_bounds[1][0]),
-                        (self.rt.scene_bounds[0][1], self.rt.scene_bounds[1][1]),
-                        (self.rt.scene_bounds[0][2], self.rt.scene_bounds[1][2]))
-        self.scene_bounds = scene_bounds
-
-        #Inicialización del Dron
-        self.dron = Dron(start_xyz=self._start, bounds=scene_bounds)
-        self.rt.move_tx(self.dron.pos,(0,0,0)) #Sincronización inicial física-lógica
-
-        #Espacios de Gymnasium (Espacios de Acción y Observación)
+        # Dron / spaces
+        self.dron = Dron(start_xyz=self._start, bounds=bounds)
         self.action_space = spaces.Box(low=-5.0, high=5.0, shape=(3,), dtype=np.float32)
-
-        #Se asume N fijo para el shape del espacio de observación
         self.observation_space = spaces.Box(
-            low=-1e9, high=1e9, shape=(3 + self.current_num_agents,), dtype=np.float32
+            low=-1e9, high=1e9, shape=(3 + self.receptores.n,), dtype=np.float32
         )
-        self.dron.bounds = scene_bounds
+        self.dron.bounds = bounds
 
 
         #Inicializacion para movimiento de dron realista
@@ -178,40 +119,36 @@ class DroneEnv(gym.Env):
         self._cbar = None
         self._name_texts = []
 
+        # Acumuladores por-UE para la tabla (id -> dict)
+        self._acc = None
+        self._last_ue_metrics = None
+
+        # ================= Gym API =================
+
     def reset(self, *, seed: int | None = None, options: dict | None = None):
-        #Reinicia el entorno a su estado inicial para un nuevo episodio.
         super().reset(seed=seed)
         self.step_count = 0
 
-        #Reinicio del Dron y TX
         self.dron = Dron(start_xyz=self._start, bounds=self.scene_bounds)
         self.rt.move_tx(self.dron.pos, (0.0, 0.0, 0.0))
 
-        #Renicio de receptores (Manager)
-        #El Manager se encarga de: Spawn, Metas, SFM Reset
-        self.receptores = self.mobility_manager.reset(
-            num_agents=self.current_num_agents,  #Número de receptores
-            rx_positions=self._manual_rx_pos,    #Posiciones iniciales
-            rx_goals=self._manual_rx_goals,      #Metas
-            seed=seed                            #Semilla
-        )
-
-        #Sincronización con Sionna (attach_receivers)
-        #El manager crea los objetos, pero el entorno los conecta al RT.
-        self.rt.attach_receivers(self.receptores.positions_xyz())
-
-        #Se expone el simulador para visualización externa
-        self.sfm_sim = self.mobility_manager.sfm_sim
-
-        #Regenerar primera observación (Observación inicial)
         obs = np.concatenate([self.dron.pos]).astype(np.float32)
         info = {}
 
-        #Limpieza de estado de renderizado y métricas
-        #Se borran las referencias gráficas para evitar superposiciones en nuevos episodios
-        self._init_render_vars()
+        # ---- estado de render ----
+        self._fig = None
+        self._ax_map = None
+        self._ax_list = None
+        self._ax_table_top = None
+        self._ax_table_br = None
+        self._canvas = None
+
+        self._sc_rx = None
+        self._sc_drone = None
+        self._cbar = None
+        self._name_texts = []
+
         self._last_ue_metrics = []
-        self.num_ut = self.receptores.n
 
         self.dron_Realista.reset()
 
@@ -226,10 +163,7 @@ class DroneEnv(gym.Env):
 
         return obs, info
 
-    def step(self, action: np.ndarray):
-        """
-        Ejecuta un paso de simulación (t -> t+dt)
-        """
+    def step(self, action: np.ndarray, actionR: np.ndarray | None = None):
         self.step_count += 1
 
         # Movimiento del dron
@@ -254,14 +188,16 @@ class DroneEnv(gym.Env):
         for rx, pos in zip(self.rt.rx_list, rx_positions):
             rx.position = [float(pos[0]), float(pos[1]), float(pos[2])]
 
-        #3.Métricas y Sionna SYS
-        info = self._get_metrics_info()
-        # sys_metrics = self.rt.run_sys_step()
 
-        #Recompensa
+
+        # --- Ejecutar paso SYS y obtener métricas ---
+        sys_metrics = self.rt.run_sys_step()
+
+        # --- Recompensa ---
+        # reward = float(np.mean(snr))
         reward = 1.0
 
-        #Observación
+        # --- Observación ---
         obs = np.concatenate([self.dron.pos]).astype(np.float32)
 
         # --- Terminación ---
@@ -273,11 +209,28 @@ class DroneEnv(gym.Env):
 
         truncated = self.step_count >= self.max_steps
 
-        #Renderizado
-        if self.render_mode is not None:
-            self._handle_render(info)
+        info = {
+            # --- métricas por UE del step (ya las tenías) ---
+            "ue_metrics": sys_metrics["ue_metrics"],
 
-        print(f"Termine: {terminated}, Truncated: {truncated}")
+            # --- TBLER acumulada estilo tutorial ---
+            # Vector [num_ut] con la TBLER running a este step (idéntica al notebook de Sionna SYS)
+            "tbler_running_per_ue": sys_metrics.get("tbler_running_per_ue"),  # list[float] tamaño num_ut
+
+        }
+        
+        if self.render_mode is None:
+            return obs, reward, terminated, truncated, info
+        
+        elif self.render_mode == "human":
+            self._last_ue_metrics = info["ue_metrics"]  # cache para render
+            self._last_tbler_running_per_ue = info.get("tbler_running_per_ue", None)
+            self._render_to_figure()
+        elif self.render_mode == "rgb_array":
+            self._last_ue_metrics = info["ue_metrics"]  # cache para render
+            self._last_tbler_running_per_ue = info.get("tbler_running_per_ue", None)
+            frame = self._render_to_array()
+            info["frame"] = frame
 
         return obs, reward, terminated, truncated, info
 
@@ -590,39 +543,6 @@ class DroneEnv(gym.Env):
         self._ax_gp = None
         self._bars_gp = None
         self._bar_labels = []
-
-    def _init_render_vars(self):
-        self._fig = None
-        self._ax = None
-        self._canvas = None
-        self._ax_map = None
-        self._ax_list = None
-        self._ax_table = None
-        self._sc_rx = None
-        self._sc_drone = None
-        self._cbar = None
-        self._name_texts = []
-        self._acc = None
-        self._last_ue_metrics = None
-
-    def _get_metrics_info(self):
-        if self.run_metrics:
-            # Modo Lento (Física + Métricas)
-            sys_metrics = self.rt.run_sys_step()
-            return {
-                "ue_metrics": sys_metrics["ue_metrics"],
-                "tbler_running_per_ue": sys_metrics.get("tbler_running_per_ue"),
-            }
-        # Modo Rápido (Física)
-        return {"ue_metrics": [], "tbler_running_per_ue": []}
-
-    def _handle_render(self, info):
-        self._last_ue_metrics = info["ue_metrics"]
-        self._last_tbler_running_per_ue = info.get("tbler_running_per_ue", None)
-        if self.render_mode == "human":
-            self._render_to_figure()
-        elif self.render_mode == "rgb_array":
-            info["frame"] = self._render_to_array()
 
     """
     # ================= Render avanzado (dual snapshot) =================
