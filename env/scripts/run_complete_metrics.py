@@ -24,8 +24,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from datetime import datetime
+import matplotlib.animation as animation
 from matplotlib.ticker import ScalarFormatter, MaxNLocator
 from matplotlib.gridspec import GridSpec
+from matplotlib.lines import Line2D
 
 # Desplazamientos y estilos por frecuencia para evitar solapamiento
 _X_OFFSETS = [-0.12, -0.04, 0.04, 0.12, 0.20, -0.20]  # se cicla si hay >6 freqs
@@ -86,7 +88,7 @@ FREQ_LABELS = [f"{f:.0f} MHz" for f in FREQS_MHZ]
 
 # Carpeta de salida con timestamp
 RUN_TAG = datetime.now().strftime("%Y%m%d-%H%M%S")
-#OUT_DIR = Path(project_root) / "outputs" / f"compare_metrics_{RUN_TAG}"
+#OUT_DIR = Path(project_root) / "Pruebas finales" / f"METRICS_{RUN_TAG}_{SCENE}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps"
 OUT_DIR = Path(project_root) / "Pruebas movimiento dron gymnasium" / f"compare_metrics_{RUN_TAG}"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -209,116 +211,194 @@ def _get_rx_positions_xyz(rt) -> np.ndarray:
     raise AttributeError("No pude obtener posiciones de receptores (rx_list o receptores.positions_xyz).")
 
 
-def plot_trajectories_xy_xz(tracks: dict, out_path: Path, title_prefix="Trayectorias",
-                            step_stride=5, show_step_labels=False, rx_labels=None):
-    """
-    XY + XZ, con títulos separados, leyenda global fuera (derecha) y:
-    - etiquetas "UEi" en la vista XY junto al punto inicial de cada receptor
-    - marcadores de inicio/fin para cada UE también en XZ
-    """
-    drone = tracks["drone"]      # (T,3)
-    ues   = tracks["ues"]        # (T,N,3)
-    steps = tracks["steps"]
-    T = drone.shape[0]; N = ues.shape[1]
+def plot_trajectories_xy_xz(tracks, obstacles, scene_bounds, out_path, freq_mhz, num_agents, seed):
+    drone = tracks["drone"]
+    ues = tracks["ues"]
+    T = ues.shape[0]
+    N = ues.shape[1]
+    rx_labels = [f"UE{i}" for i in range(N)]
 
-    # etiquetas por UE
-    if rx_labels is None or len(rx_labels) != N:
-        rx_labels = [f"UE{i}" for i in range(N)]
-
-    def _auto_limits_xy(pad=5.0):
-        d = drone[:, :2]
-        u = ues[:, :, :2].reshape(-1, 2)
-        allxy = np.vstack([d, u])
-        xmin, ymin = np.nanmin(allxy, axis=0)
-        xmax, ymax = np.nanmax(allxy, axis=0)
-        return (xmin - pad, xmax + pad, ymin - pad, ymax + pad)
-
-    xmin, xmax, ymin, ymax = _auto_limits_xy(pad=5.0)
-
-    # deja margen derecho para la leyenda (≈20%)
-    fig = plt.figure(figsize=(13.8, 7.6))
-    gs  = GridSpec(2, 1, height_ratios=[2, 1], figure=fig)
-    fig.subplots_adjust(left=0.08, right=0.80, top=0.90, bottom=0.08, hspace=0.32)
+    fig = plt.figure(figsize=(16, 12))
+    gs = GridSpec(2, 1, height_ratios=[3, 1.2], figure=fig)
+    fig.subplots_adjust(left=0.08, right=0.82, top=0.92, bottom=0.08, hspace=0.35)
 
     ax_xy = fig.add_subplot(gs[0, 0])
     ax_xz = fig.add_subplot(gs[1, 0])
 
-    # ===== XY =====
-    ax_xy.set_title(f"{title_prefix} — Planta (XY)", pad=12)
-    ax_xy.set_xlabel("X [m]"); ax_xy.set_ylabel("Y [m]")
-    ax_xy.set_aspect("equal", adjustable="box")
-    ax_xy.set_xlim([xmin, xmax]); ax_xy.set_ylim([ymin, ymax])
-    ax_xy.grid(True, ls="--", alpha=0.35); ax_xy.set_axisbelow(True)
+    # --- PLANTA (XY) ---
+    ax_xy.set_title(f"Escenario: {SCENE}\nFrecuencia: {freq_mhz:.0f} MHz | {num_agents} Agentes | Semilla N° {seed} ({T} pasos)",
+                    pad=12, fontsize=14, weight='bold')
+    ax_xy.set_xlabel("X [m]", fontsize=12)
+    ax_xy.set_ylabel("Y [m]", fontsize=12)
+    ax_xy.set_aspect("equal", adjustable='datalim')
 
-    # Drone
-    ax_xy.plot(drone[:,0], drone[:,1], lw=2.0, label="Drone", zorder=2.5)
-    ax_xy.scatter(drone[0,0], drone[0,1], s=110, marker="^", label="Drone start", zorder=3)
-    ax_xy.scatter(drone[-1,0], drone[-1,1], s=110, marker=">", label="Drone end", zorder=3)
-    for k in range(0, T-1, step_stride):
-        dx = drone[k+1,0]-drone[k,0]; dy = drone[k+1,1]-drone[k,1]
-        ax_xy.arrow(drone[k,0], drone[k,1], dx, dy, length_includes_head=True,
-                    head_width=0.8, alpha=0.8, zorder=2.6)
+    # LÍMITES
+    if scene_bounds:
+        (xmin, xmax) = scene_bounds[0]
+        (ymin, ymax) = scene_bounds[1]
+        extent_x = xmax - xmin
+        extent_y = ymax - ymin
+        margin_x = extent_x * 0.05
+        margin_y = extent_y * 0.05
+        ax_xy.set_xlim(xmin - margin_x, xmax + margin_x)
+        ax_xy.set_ylim(ymin - margin_y, ymax + margin_y)
+    else:
+        all_xy = np.vstack([drone[:, :2], ues[:, :, :2].reshape(-1, 2)])
+        pad = 10
+        ax_xy.set_xlim(np.min(all_xy[:, 0]) - pad, np.max(all_xy[:, 0]) + pad)
+        ax_xy.set_ylim(np.min(all_xy[:, 1]) - pad, np.max(all_xy[:, 1]) + pad)
 
-    # UEs en XY (con etiquetas y marcadores inicio/fin)
+    ax_xy.grid(True, ls="--", alpha=0.35)
+
+    # --- OBSTÁCULOS (CAMBIO: MÁS OSCUROS) ---
+    if obstacles:
+        obs_stack = np.vstack(obstacles)
+        n_points = len(obs_stack)
+        if n_points > 0:
+            marker_size = 10000.0 / n_points
+            marker_size = max(0.1, min(marker_size, 2.0))
+
+            ax_xy.scatter(obs_stack[:, 0], obs_stack[:, 1],
+                       s=marker_size, c='black', marker='.', alpha=1.0)
+
+    # Dron XY
+    ax_xy.plot(drone[:, 0], drone[:, 1], lw=3.0, label="Drone", zorder=2.5, color='tab:blue')
+    ax_xy.scatter(drone[0, 0], drone[0, 1], s=150, marker="^", label="Drone start", zorder=3, edgecolors='k',
+                  color='tab:blue')
+
+    # UEs XY
+    colors = matplotlib.colormaps['tab10']
     for i in range(N):
+        c = colors(i % 10)
         traj = ues[:, i, :]
-        x0, y0 = traj[0,0], traj[0,1]
-        x1, y1 = traj[-1,0], traj[-1,1]
+        ax_xy.plot(traj[:, 0], traj[:, 1], lw=3, color=c, label=rx_labels[i], zorder=2.2, alpha=0.9)
+        ax_xy.scatter(traj[0, 0], traj[0, 1], s=120, marker="o", color=c, zorder=2.8, edgecolors='white')
+        ax_xy.scatter(traj[-1, 0], traj[-1, 1], s=120, marker="s", color=c, zorder=2.8, edgecolors='white')
 
-        ax_xy.plot(traj[:,0], traj[:,1], lw=1.8, label=rx_labels[i], zorder=2.2)
-        ax_xy.scatter(x0, y0, s=70, marker="o", zorder=2.8)
-        ax_xy.scatter(x1, y1, s=70, marker="s", zorder=2.8)
+        if N <= 20:
+            ax_xy.text(traj[0, 0] + 1.5, traj[0, 1] + 1.5, rx_labels[i], fontsize=11, weight="bold", color=c, zorder=5)
 
-        # etiqueta “UEi” al lado del punto inicial (ligero desplazamiento para no tapar)
-        ax_xy.text(x0 + 0.6, y0 + 0.6, rx_labels[i], fontsize=9, weight="bold",
-                   alpha=0.95, zorder=3)
+    # --- PERFIL (XZ) (CAMBIO: INICIO CÍRCULO / FIN CUADRADO) ---
+    ax_xz.set_title("Perfil de Elevación (XZ)", pad=10, fontsize=14, weight='bold')
+    ax_xz.set_xlabel("X [m]", fontsize=12)
+    ax_xz.set_ylabel("Z [m]", fontsize=12)
+    ax_xz.grid(True, ls="--", alpha=0.35)
 
-        for k in range(0, T-1, step_stride):
-            dx = traj[k+1,0]-traj[k,0]; dy = traj[k+1,1]-traj[k,1]
-            ax_xy.arrow(traj[k,0], traj[k,1], dx, dy, length_includes_head=True,
-                        head_width=0.6, alpha=0.6, zorder=2.4)
-        if show_step_labels:
-            for k in range(0, T, step_stride):
-                ax_xy.text(traj[k,0], traj[k,1], str(steps[k]), fontsize=7, alpha=0.85)
+    ax_xz.set_xlim(ax_xy.get_xlim())
+    ax_xz.set_ylim(0, 18)
+    ax_xz.set_aspect('auto')
 
-    # ===== XZ =====
-    ax_xz.set_title("Perfil XZ", pad=10)
-    ax_xz.set_xlabel("X [m]"); ax_xz.set_ylabel("Z [m]")
-    ax_xz.grid(True, ls="--", alpha=0.35); ax_xz.set_axisbelow(True)
+    # Dron
+    ax_xz.plot(drone[:, 0], drone[:, 2], lw=3.0, label="Drone", color='tab:blue')
+    ax_xz.scatter(drone[0, 0], drone[0, 2], s=100, marker="^", color='tab:blue', edgecolors='k')
 
-    # Drone con inicio/fin
-    ax_xz.plot(drone[:,0], drone[:,2], lw=2.0, label="Drone")
-    ax_xz.scatter(drone[0,0], drone[0,2], s=90, marker="^")
-    ax_xz.scatter(drone[-1,0], drone[-1,2], s=90, marker=">")
-
-    # UEs en XZ con inicio/fin + etiqueta cerca del inicio
+    # UEs
     for i in range(N):
-        traj = ues[:, i, :]
-        x0, z0 = traj[0,0], traj[0,2]
-        x1, z1 = traj[-1,0], traj[-1,2]
+        c = colors(i % 10)
+        # Trayectoria
+        ax_xz.plot(ues[:, i, 0], ues[:, i, 2], lw=2.5, color=c, label=rx_labels[i], alpha=0.8)
+        # Inicio (Círculo)
+        ax_xz.scatter(ues[0, i, 0], ues[0, i, 2], s=80, marker="o", color=c, edgecolors='white', zorder=3)
+        # Fin (Cuadrado)
+        ax_xz.scatter(ues[-1, i, 0], ues[-1, i, 2], s=80, marker="s", color=c, edgecolors='white', zorder=3)
 
-        ax_xz.plot(traj[:,0], traj[:,2], lw=1.4, label=rx_labels[i])
-        ax_xz.scatter(x0, z0, s=60, marker="o")  # inicio
-        ax_xz.scatter(x1, z1, s=60, marker="s")  # fin
+    # Leyenda
+    obst_proxy = Line2D([0], [0], marker='o', color='w', label='Obstáculos', markerfacecolor='#202020', markersize=8,
+                        alpha=0.6)
+    handles_xy, labels_xy = ax_xy.get_legend_handles_labels()
+    unique_labels = dict(zip(labels_xy, handles_xy))
 
-        # etiqueta en XZ al lado del punto inicial (desplazada en Z)
-        ax_xz.text(x0 + 0.6, z0 + 0.6, rx_labels[i], fontsize=8.5, alpha=0.95)
+    if N > 15:
+        final_handles = [unique_labels['Drone']] + [obst_proxy]
+        final_labels = ['Drone', 'Obstáculos']
+    else:
+        final_handles = [unique_labels['Drone']] + [unique_labels[l] for l in rx_labels if l in unique_labels] + [
+            obst_proxy]
+        final_labels = ['Drone'] + [l for l in rx_labels if l in unique_labels] + ['Obstáculos']
 
-    # ===== Leyenda global afuera (derecha) =====
-    handles, labels = [], []
-    for ax in (ax_xy, ax_xz):
-        h, l = ax.get_legend_handles_labels()
-        handles += h; labels += l
-    seen=set(); H=[]; L=[]
-    for h,l in zip(handles, labels):
-        if l not in seen:
-            H.append(h); L.append(l); seen.add(l)
+    fig.legend(final_handles, final_labels, loc="center left", bbox_to_anchor=(0.83, 0.5), title="Leyenda")
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
 
-    fig.legend(H, L, loc="center left", bbox_to_anchor=(0.82, 0.5),
-               frameon=False, title="Leyenda", borderaxespad=0.0)
+def make_gif(tracks, obstacles, scene_bounds, out_path, fps=20):
+    ues = tracks["ues"]
+    T, N, _ = ues.shape
 
-    fig.suptitle("Trayectorias — Drone y UEs", y=0.97, fontsize=14)
-    fig.savefig(out_path, dpi=180, bbox_inches="tight")
+    fig, ax = plt.subplots(figsize=(12, 12))
+    fig.subplots_adjust(right=0.80)
+
+    ax.set_aspect('equal')
+    ax.set_xlabel("X [m]")
+    ax.set_ylabel("Y [m]")
+    ax.set_title(f"Simulación Dinámica (Sionna + SocialForce)\nEscenario: {SCENE} | {N} Agentes | Semilla N° {SEMILLA} ({T} pasos)",
+                 pad=12, fontsize=14, weight='bold')
+    ax.grid(True, alpha=0.3)
+
+    if obstacles:
+        obs_stack = np.vstack(obstacles)
+        n_points = len(obs_stack)
+        if n_points > 0:
+            marker_size = 10000.0 / n_points
+            marker_size = max(0.1, min(marker_size, 2.0))
+
+            # Igualamos alpha a 0.6
+            ax.scatter(obs_stack[:, 0], obs_stack[:, 1],
+                       s=marker_size, c='black', marker='.', alpha=1.0)
+
+    if scene_bounds:
+        (xmin, xmax) = scene_bounds[0]
+        (ymin, ymax) = scene_bounds[1]
+        extent_x = xmax - xmin
+        extent_y = ymax - ymin
+        margin_x = extent_x * 0.05
+        margin_y = extent_y * 0.05
+        ax.set_xlim(xmin - margin_x, xmax + margin_x)
+        ax.set_ylim(ymin - margin_y, ymax + margin_y)
+    else:
+        all_xy = ues[:, :, :2].reshape(-1, 2)
+        pad = 5
+        ax.set_xlim(np.min(all_xy[:, 0]) - pad, np.max(all_xy[:, 0]) + pad)
+        ax.set_ylim(np.min(all_xy[:, 1]) - pad, np.max(all_xy[:, 1]) + pad)
+
+    cmap = matplotlib.colormaps['tab10']
+    colors = [cmap(i % 10) for i in range(N)]
+
+    start_pos = ues[0, :, :2]
+    scats = ax.scatter(start_pos[:, 0], start_pos[:, 1], s=100, c=colors, zorder=5, edgecolors='white')
+    trails = [ax.plot([], [], '-', lw=2, color=colors[i], alpha=0.6)[0] for i in range(N)]
+
+    # Leyenda GIF
+    if N <= 15:
+        custom_lines = [Line2D([0], [0], color=colors[i], lw=2) for i in range(N)]
+        ax.legend(custom_lines, [f"UE{i}" for i in range(N)],
+                  loc='center left', bbox_to_anchor=(1.02, 0.5), title="Receptores")
+    else:
+        ax.legend([scats], [f"{N} Agentes"], loc='center left', bbox_to_anchor=(1.02, 0.5))
+
+    def update(frame):
+        current_pos = ues[frame, :, :2]
+        scats.set_offsets(current_pos)
+        start = max(0, frame - 30)
+        for i, trail in enumerate(trails):
+            trail.set_data(ues[start:frame + 1, i, 0], ues[start:frame + 1, i, 1])
+        return scats, *trails
+
+    # --- LÓGICA DE SEGURIDAD ADAPTATIVA ---
+    # Si T es pequeño (ej: 300), step_skip será 1 (sin saltos, fluido).
+    # Si T es gigante (ej: 10000), step_skip será alto (ej: 20) para no explotar.
+    TARGET_TOTAL_FRAMES = 250
+
+    if T <= TARGET_TOTAL_FRAMES:
+        step_skip = 1  # Muestra TODOS los cuadros (Perfecto para escena simple)
+    else:
+        step_skip = T // TARGET_TOTAL_FRAMES  # Salta para proteger RAM
+
+    print(f"[GIF] Generando animación con step_skip = {step_skip} (Total frames: {T // step_skip})")
+
+    frames_idx = range(0, T, step_skip)
+
+    ani = animation.FuncAnimation(fig, update, frames=frames_idx, interval=50, blit=True)
+    ani.save(out_path, writer='pillow', fps=fps)
     plt.close(fig)
 
 
@@ -1476,7 +1556,7 @@ def run_episode(freq_mhz: float) -> dict:
     drone_traj, ue_traj, steps = [], [], []
 
    
-    out_img = OUT_DIR / f"radio_map_{int(freq_mhz)}MHz.png"
+    out_img = OUT_DIR / f"radio_map_{SCENE}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.png"
     env.rt.render_scene_to_file(filename=str(out_img), with_radio_map=True)
 
     t = 0
@@ -1625,14 +1705,27 @@ def main():
         plot_all_ues_sinr_by_freq(df_all, f, OUT_DIR_RECEPTORS)               #Solo SINR
         plot_all_ues_tbler_step_by_freq(df_all, f, OUT_DIR_RECEPTORS)         #Solo TBLER step
         plot_all_ues_tbler_running_by_freq(df_all, f, OUT_DIR_RECEPTORS)      #Solo TBLER running
+    
+    # === VISUALIZACIÓN FÍSICA ===
+    print("[INFO] Generando gráficos de trayectoria y GIFs...")
 
-    # mapas XY+XZ por frecuencia
     for r in runs:
         fmhz = r["freq_mhz"]
-        out_traj = OUT_DIR / f"traj_{int(fmhz)}MHz.png"
-        title = f"SCENE={SCENE} — freq={fmhz:.0f} MHz — DRONE_START={DRONE_START}"
-        plot_trajectories_xy_xz(r["tracks"], out_path=out_traj, title_prefix=title,
-                               step_stride=5, show_step_labels=False)
+        tracks = r["tracks"]
+        obstacles = r["obstacles"]
+        bounds = r["bounds"]
+
+        #1. Plot Estático
+        out_traj = OUT_DIR / f"traj_static_{SCENE}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.png"
+        plot_trajectories_xy_xz(tracks, obstacles, bounds, out_path=out_traj,
+                                freq_mhz=fmhz, num_agents=NUM_AGENTS, seed=SEMILLA)
+        print(f"Imagen guardada: {out_traj}")
+
+        #2. GIF
+        out_gif = OUT_DIR / f"animacion_{SCENE}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.gif"
+        print("Generando GIF...")
+        make_gif(tracks, obstacles, bounds, out_path=out_gif)
+        print(f"GIF guardado: {out_gif}")
         
     #Doppler
     for f in FREQS_MHZ:
