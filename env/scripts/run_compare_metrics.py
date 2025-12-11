@@ -54,8 +54,28 @@ RX_POSITIONS = [
 ]
 MAX_STEPS = 100
 
+<<<<<<< HEAD
+#Semilla (seed) de la simulación
+SEMILLA = 0
+
+#Cantidad de agentes a generar aleatoriamente
+NUM_AGENTS = 10
+
+#Posiciones iniciales
+RX_POSITIONS = None
+
+#Metas de los receptores
+RX_GOALS = None
+
+#Máximo de pasos para la simulación (N° de steps de la simulación)
+MAX_STEPS = 10
+
+#Frecuencias de la simulación
+FREQS_MHZ = [3500.0]
+=======
 # Compara dos frecuencias (en MHz). Cambia a lo que necesites.
 FREQS_MHZ = [3500.0] #28000
+>>>>>>> origin/Union-ramas
 FREQ_LABELS = [f"{f:.0f} MHz" for f in FREQS_MHZ]
 
 # Carpeta de salida con timestamp
