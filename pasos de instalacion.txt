@@ -1,0 +1,83 @@
+#!/bin/bash
+# ========================================================
+# Script de instalación del entorno de simulación de dron
+# Ubuntu 22.04+ con Python 3.11, Gymnasium y Sionna
+# ========================================================
+
+# 1. Actualizar sistema
+sudo apt update && sudo apt upgrade -y
+
+# 2. Instalar dependencias básicas
+sudo apt install -y software-properties-common build-essential python3-pip python3-venv
+
+# 3. Agregar repositorio de Python 3.11 y actualizar
+sudo add-apt-repository ppa:deadsnakes/ppa -y
+sudo apt update
+
+# 4. Instalar Python 3.11 y pip asociado
+sudo apt install -y python3.11 python3.11-venv python3.11-dev python3.11-distutils
+
+# 5. Verificar instalación de Python 3.11
+python3.11 --version
+
+# 6. Crear carpeta de proyecto (si no existe)
+mkdir -p ~/proyectos_dron
+cd ~/proyectos_dron
+
+# 7. Crear entorno virtual con Python 3.11
+python3.11 -m venv venv
+
+# 8. Activar entorno virtual
+# (esto hay que hacerlo manualmente en cada sesión)
+# source ~/proyectos_dron/venv/bin/activate
+
+# 9. Actualizar pip dentro del entorno
+pip install --upgrade pip
+
+# 10. Instalar Gymnasium y dependencias de control clásico
+pip install gymnasium
+pip install "gymnasium[classic-control]"
+
+# 11. Instalar TensorFlow (CPU por ahora)
+pip install tensorflow
+
+# 12. Instalar Sionna
+pip install sionna
+
+# 13. instalaciones adicionales
+pip install "sionna-vispy[recommended]"
+pip install "sionna-vispy[recommended]" sionna-rt
+
+pip install --upgrade pip
+pip install wheel numpy
+pip install PyFlyt gymnasium
+
+pip install pandas
+
+
+pip install 'socialforce[dev,plot]'
+
+
+sudo apt update
+sudo apt install -y \
+  libxkbcommon-x11-0 \
+  libxcb-cursor0 \
+  libxcb-xinerama0 \
+  libxcb-icccm4 \
+  libxcb-image0 \
+  libxcb-keysyms1 \
+  libxcb-randr0 \
+  libxcb-render-util0 \
+  libxcb-xfixes0 \
+  libx11-xcb1 \
+  libxcb1 \
+  libegl1 \
+  libopengl0 \
+  libgl1 \
+  libxrender1 \
+  libxext6 \
+  libfreetype6 \
+  libfontconfig1 \
+  libdbus-1-3 \
+  libglib2.0-0
+
