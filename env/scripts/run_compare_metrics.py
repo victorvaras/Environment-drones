@@ -56,7 +56,7 @@ RX_POSITIONS = None
 RX_GOALS = None
 
 #Máximo de pasos para la simulación (N° de steps de la simulación)
-MAX_STEPS = 1000
+MAX_STEPS = 10
 
 #Frecuencias de la simulación
 FREQS_MHZ = [3500.0]
