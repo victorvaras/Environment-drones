@@ -14,7 +14,6 @@ if str(project_root) not in sys.path:
 
 # Proyecto
 from .sionnaEnv import SionnaRT
-from .dron import Dron
 from .receptores import ReceptoresManager, Receptor
 from env.environment.droneVelocityEnv import DroneVelocityEnv, DroneVelocityEnvConfig
 from .receptores_mobility import ReceptorMobilityManager
@@ -129,7 +128,7 @@ class DroneEnv(gym.Env):
         self.scene_bounds = scene_bounds
 
         #Inicialización del Dron
-        self.dron = Dron(start_xyz=self._start, bounds=scene_bounds)
+        
 
         #Espacios de Gymnasium (Espacios de Acción y Observación)
         self.action_space = spaces.Box(low=-5.0, high=5.0, shape=(3,), dtype=np.float32)
@@ -138,7 +137,7 @@ class DroneEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=-1e9, high=1e9, shape=(3 + self.current_num_agents,), dtype=np.float32
         )
-        self.dron.bounds = scene_bounds
+        
 
 
         #Inicializacion para movimiento de dron realista
@@ -172,11 +171,12 @@ class DroneEnv(gym.Env):
         self.step_count = 0
 
         #Reinicio del Dron y TX
-        self.dron = Dron(start_xyz=self._start, bounds=self.scene_bounds)
+        
 
         #Sincronización con Sionna
         #Se mueve el transmisor a la posición inicial para que el cálculo sea correcto desde t=0
-        self.rt.move_tx(self.dron.pos, (0.0, 0.0, 0.0))
+        self.dron_Realista.reset()
+        self.rt.move_tx(self._start, (0.0, 0.0, 0.0))
 
         #Renicio de receptores (Manager)
         #El Manager se encarga de: Spawn, Metas, SFM Reset
@@ -195,7 +195,7 @@ class DroneEnv(gym.Env):
         self.sfm_sim = self.mobility_manager.sfm_sim
 
         #Regenerar primera observación (Observación inicial)
-        obs = np.concatenate([self.dron.pos]).astype(np.float32)
+        obs = np.concatenate([self._start]).astype(np.float32)
         info = {}
 
         #Limpieza de estado de renderizado y métricas
@@ -210,9 +210,6 @@ class DroneEnv(gym.Env):
     def step(self, action: np.ndarray, actionR: np.ndarray | None = None):
         self.step_count += 1
 
-        # Movimiento del dron
-        #self.dron.step_delta(action)
-        #self.rt.move_tx(self.dron.pos)
 
         #1.Movimiento del Dron
         movimiento_normalizado = self.dron_Realista.step_move(action, dt=0.1)
@@ -233,7 +230,7 @@ class DroneEnv(gym.Env):
         reward = 1.0
 
         #Observación
-        obs = np.concatenate([self.dron.pos]).astype(np.float32)
+        obs = np.concatenate([movimiento_normalizado]).astype(np.float32)
 
         # --- Terminación ---
         #movimiento_valido = True
@@ -348,7 +345,7 @@ class DroneEnv(gym.Env):
         # --- Datos base ---
         prx = np.asarray(self.rt.compute_prx_dbm(), dtype=float).reshape(-1)
         rx = self.receptores.positions_xyz()  # shape (N, 3)
-        drone_xyz = np.asarray(self.dron.pos, dtype=float).reshape(3)
+        drone_xyz = np.asarray(self._start, dtype=float).reshape(3)
 
         # === ACTUALIZAR STEP EN EL TÍTULO ===
         if hasattr(self, '_suptitle'):
