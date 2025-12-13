@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import datetime
-import numpy as np
-import gymnasium as gym
-from gymnasium import spaces
+
 import sys
 from pathlib import Path
+
+import gymnasium as gym
+import numpy as np
+from gymnasium import spaces
 
 # (Se mantiene para no romper ejecuciones fuera del paquete)
 project_root = Path(__file__).resolve().parents[2]
@@ -14,7 +15,6 @@ if str(project_root) not in sys.path:
 
 # Proyecto
 from .sionnaEnv import SionnaRT
-from .receptores import ReceptoresManager, Receptor
 from env.environment.droneVelocityEnv import DroneVelocityEnv, DroneVelocityEnvConfig
 from .receptores_mobility import ReceptorMobilityManager
 
@@ -177,6 +177,9 @@ class DroneEnv(gym.Env):
         #Se mueve el transmisor a la posición inicial para que el cálculo sea correcto desde t=0
         self.dron_Realista.reset()
         self.rt.move_tx(self._start, (0.0, 0.0, 0.0))
+
+        #Se realiza la limpieza de los receptores viejos de Sionna antes de crear nuevos
+        self.rt.remove_receivers()
 
         #Renicio de receptores (Manager)
         #El Manager se encarga de: Spawn, Metas, SFM Reset
