@@ -46,6 +46,9 @@ DRONE_START = (-85.0, 0.0, 15.0)
 #Semilla (seed) de la simulación
 SEMILLA = 0
 
+#Paso de tiempo (Delta Time)
+DT = 0.1
+
 #Cantidad de agentes a generar aleatoriamente
 NUM_AGENTS = 10
 
@@ -1610,7 +1613,8 @@ def run_episode(freq_mhz: float) -> dict:
         antenna_mode="SECTOR3_3GPP",  # "ISO" o "SECTOR3_3GPP"
         frequency_mhz=freq_mhz,
         mode_set_vuelo=mode_set_vuelo,
-        run_metrics=True
+        run_metrics=True,
+        step_durations = DT
     )
 
     #Recuperar límites
