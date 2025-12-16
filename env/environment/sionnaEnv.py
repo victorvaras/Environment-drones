@@ -515,8 +515,33 @@ class SionnaRT:
         self.txs.append(tx)
         self.tx = tx  # compat
 
+    def remove_receivers(self):
+        """
+        Elimina los receptores (RX_*) de la escena para permitir un reset limpio.
+        Evita el error 'ValueError: Name RX_0 is already used'.
+        """
+        if self.scene is None:
+            return
 
+        #1.Se identifican los receptores a borrar (los que empiezan con "RX_")
+        #Se usa list() para crear una copia de las claves y no romper el iterador al borrar
+        objs_to_remove = []
+        try:
+            #Se itera sobre los receptores que tiene Sionna en memoria
+            for name in self.scene.receivers.keys():
+                if name.startswith("RX_"):
+                    objs_to_remove.append(name)
 
+            #2.Se borran de la escena
+            for name in objs_to_remove:
+                self.scene.remove(name)
+
+        except Exception as e:
+            print(f"[SionnaRT] Advertencia al limpiar receptores: {e}")
+
+        #3.Se limpia la lista interna de referencias
+        #Importante para que no queden residuos en la lista
+        self.rx_list = []
 
     def attach_receivers(self, rx_positions_xyz: np.ndarray):
         assert self.scene is not None, "build_scene() no fue llamado."

@@ -3,10 +3,17 @@ import numpy as np
 import torch
 import socialforce
 from socialforce import potentials
+from dataclasses import dataclass
 
 #Proyecto
 from .spawn_manager import SpawnManager
-from .receptores import ReceptoresManager, Receptor
+
+@dataclass
+class Receptor:
+    """Datos básicos del receptor (posición inicial)."""
+    x: float
+    y: float
+    z: float
 
 class ReceptorMobilityManager:
     """
@@ -14,7 +21,7 @@ class ReceptorMobilityManager:
     Social Force Model, Control Reactivo y Validación Física.
     """
 
-    def __init__(self, sionna_rt, bounds_min, bounds_max,
+    def __init__(self, sionna_rt, bounds_min, bounds_max, dt_sim=0.1,
                  sfm_v0=5.0, sfm_sigma=0.5, sfm_u0=80.0, sfm_r=0.5):
         """
         Args:
@@ -27,6 +34,9 @@ class ReceptorMobilityManager:
         self.rt = sionna_rt
         self.bounds_min = bounds_min
         self.bounds_max = bounds_max
+
+        #Paso de tiempo físico (dt de tiempo)
+        self.dt_sim = dt_sim
 
         #Parámetros SFM y SpawnManager
         #Parámetros Potencial Agente-Agente (PedPed)
@@ -112,10 +122,7 @@ class ReceptorMobilityManager:
             )
 
         #Ahora que se tienen las posiciones iniciales (manuales o generadas), se crean los objetos
-        self.receptores_manager = ReceptoresManager([Receptor(*p) for p in rx_positions])
-
-        #Configuración Motor SFM
-        dt = 0.1  #Paso de tiempo físico (100 ms)
+        self.receptores = [Receptor(*p) for p in rx_positions]
 
         #Potencial Agente-Agente (PedPed)
         #Define la fuerza de repulsión entre peatones para evitar choques entre ellos.
@@ -124,7 +131,7 @@ class ReceptorMobilityManager:
             sigma=self.sfm_sigma, #Alcance de la fuerza
             asymmetry=0.3         #Factor de asimetria para esquive vertical entre receptores
         )
-        ped_ped.delta_t_step = dt
+        ped_ped.delta_t_step = self.dt_sim
 
         #Potencial Agente-Obstáculo (PedSpace)
         ped_space = potentials.PedSpacePotential(
@@ -136,7 +143,7 @@ class ReceptorMobilityManager:
         #Inicialización del Simulador SFM
         #Este gestionará el movimiento autónomo de los peatones.
         self.sfm_sim = socialforce.Simulator(
-            delta_t=dt,             #Paso de tiempo dentro del simulador SFM
+            delta_t=self.dt_sim,    #Paso de tiempo dentro del simulador SFM
             ped_ped=ped_ped,        #Potencial Agente-Agente (PedPed)
             ped_space=ped_space,    #Potencial Agente-Obstáculo (PedSpace)
             oversampling=1,         #Sincroniza la física del SFM 1:1 con el paso de Gym.
@@ -168,9 +175,9 @@ class ReceptorMobilityManager:
         #Se convierte a Tensor de PyTorch (formato requerido para la librería socialforce)
         self.sfm_current_state = torch.tensor(initial_state, dtype=torch.float32)
 
-        return self.receptores_manager
+        return self.receptores
 
-    def step(self, dt=0.1):
+    def step(self):
         """
         Ejecuta UN paso de simulación completo:
         1.SFM (Cálculo de fuerzas sociales)
@@ -180,6 +187,9 @@ class ReceptorMobilityManager:
         """
         if self.sfm_sim is None:
             return
+
+        #Paso de tiempo
+        dt = self.dt_sim
 
         #1.Obtener propuesta del SFM
         #Se consulta a la librería socialforce el siguiente estado deseado.
@@ -196,7 +206,7 @@ class ReceptorMobilityManager:
         #2.Control Reactivo: Evasión de Mínimos Locales
         #Problema: El modelo SFM puede caer en equilibrios estables (velocidad ~0) frente a muros planos.
         #Solución: Se detecta el estancamiento y se aplica una fuerza de escape tangencial.
-        for i in range(self.receptores_manager.n):
+        for i in range(len(self.receptores)):
             #Análisis del Estado Cinético (Velocidad actual)
             vel_mag = np.linalg.norm(proposed_vel_2d[i])
 
@@ -276,3 +286,7 @@ class ReceptorMobilityManager:
 
         #5.Se guarda y actualizar el Tensor SFM del estado para ser utilizado el siguiente ciclo
         self.sfm_current_state = torch.tensor(new_validated_state_np, dtype=torch.float32)
+
+    #Helper para obtener posiciones como un array
+    def get_positions_xyz(self) -> np.ndarray:
+        return np.array([[r.x, r.y, r.z] for r in self.receptores], dtype=float)

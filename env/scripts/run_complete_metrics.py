@@ -46,6 +46,9 @@ DRONE_START = (-85.0, 0.0, 15.0)
 #Semilla (seed) de la simulación
 SEMILLA = 0
 
+#Paso de tiempo (Delta Time)
+DT = 0.1
+
 #Cantidad de agentes a generar aleatoriamente
 NUM_AGENTS = 10
 
@@ -224,7 +227,7 @@ def plot_trajectories_xy_xz(tracks, obstacles, scene_bounds, out_path, freq_mhz,
     ax_xz = fig.add_subplot(gs[1, 0])
 
     # --- PLANTA (XY) ---
-    ax_xy.set_title(f"Escenario: {SCENE}\nFrecuencia: {freq_mhz:.0f} MHz | {num_agents} Agentes | Semilla N° {seed} ({T} pasos)",
+    ax_xy.set_title(f"Escenario: {SCENE}\nFrecuencia: {freq_mhz:.0f} MHz | {num_agents} Agentes | Semilla N° {seed} ({T-1} pasos)",
                     pad=12, fontsize=14, weight='bold')
     ax_xy.set_xlabel("X [m]", fontsize=12)
     ax_xy.set_ylabel("Y [m]", fontsize=12)
@@ -358,7 +361,7 @@ def make_gif(tracks, obstacles, scene_bounds, out_path, fps=20):
     ax.set_ylabel("Y [m]")
     ax.set_title(
         f"Simulación Dinámica (Sionna + SocialForce)\n"
-        f"Escenario: {SCENE} | {N} Agentes | Semilla N° {SEMILLA} ({T} pasos)",
+        f"Escenario: {SCENE} | {N} Agentes | Semilla N° {SEMILLA} ({T-1} pasos)",
         pad=12, fontsize=14, weight='bold'
     )
     ax.grid(True, alpha=0.3)
@@ -1610,7 +1613,8 @@ def run_episode(freq_mhz: float) -> dict:
         antenna_mode="SECTOR3_3GPP",  # "ISO" o "SECTOR3_3GPP"
         frequency_mhz=freq_mhz,
         mode_set_vuelo=mode_set_vuelo,
-        run_metrics=True
+        run_metrics=True,
+        step_durations = DT
     )
 
     #Recuperar límites

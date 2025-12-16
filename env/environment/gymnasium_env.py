@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import datetime
-import numpy as np
-import gymnasium as gym
-from gymnasium import spaces
+
 import sys
 from pathlib import Path
+
+import gymnasium as gym
+import numpy as np
+from gymnasium import spaces
 
 # (Se mantiene para no romper ejecuciones fuera del paquete)
 project_root = Path(__file__).resolve().parents[2]
@@ -14,7 +15,6 @@ if str(project_root) not in sys.path:
 
 # Proyecto
 from .sionnaEnv import SionnaRT
-from .receptores import ReceptoresManager, Receptor
 from env.environment.droneVelocityEnv import DroneVelocityEnv, DroneVelocityEnvConfig
 from .receptores_mobility import ReceptorMobilityManager
 
@@ -25,6 +25,7 @@ class DroneEnv(gym.Env):
 
     def __init__(
             self,
+            step_durations: float = 0.1,
             rx_positions: list[tuple[float, float, float]] | None = None,
             rx_goals: list[tuple[float, float, float]] | None = None,
             num_agents: int = 10,
@@ -37,10 +38,7 @@ class DroneEnv(gym.Env):
             render_mode: str | None = None,
             drone_start: tuple[float, float, float] = (0.0, 0.0, 20.0),
             run_metrics: bool = False,
-
             mode_set_vuelo: int = 7,
-            step_durations: float = 0.1,
-
     ):
         super().__init__()
         assert render_mode in (None, "human", "rgb_array"), \
@@ -48,6 +46,7 @@ class DroneEnv(gym.Env):
         self.render_mode = render_mode
 
         self._start = drone_start
+        self.sim_dt = step_durations
         self.max_steps = int(max_steps)
         self.step_count = 0
         self.run_metrics = run_metrics
@@ -86,6 +85,7 @@ class DroneEnv(gym.Env):
             sionna_rt=self.rt,                                                   #Sionna
             bounds_min=(self.rt.scene_bounds[0][0], self.rt.scene_bounds[0][1]), #Limites minimos de la escena
             bounds_max=(self.rt.scene_bounds[1][0], self.rt.scene_bounds[1][1]), #Limites máximos de la escena
+            dt_sim=self.sim_dt,                                                  #Paso de tiempo (dt de tiempo)
             sfm_v0=5.0, sfm_sigma=0.5, sfm_u0=80.0, sfm_r=0.5                    #Parametros SFM
         )
 
@@ -155,11 +155,9 @@ class DroneEnv(gym.Env):
             record_trajectory=True,
         )
 
-        self.step_durations = step_durations
-
         self.dron_Realista = DroneVelocityEnv(
             cfg = cfg,
-            step_durations = self.step_durations)
+            step_durations = self.sim_dt)
 
         #Variables de Renderizado
         self._init_render_vars()
@@ -178,6 +176,9 @@ class DroneEnv(gym.Env):
         self.dron_Realista.reset()
         self.rt.move_tx(self._start, (0.0, 0.0, 0.0))
 
+        #Se realiza la limpieza de los receptores viejos de Sionna antes de crear nuevos
+        self.rt.remove_receivers()
+
         #Renicio de receptores (Manager)
         #El Manager se encarga de: Spawn, Metas, SFM Reset
         self.receptores = self.mobility_manager.reset(
@@ -189,7 +190,7 @@ class DroneEnv(gym.Env):
 
         #Sincronización con Sionna (attach_receivers)
         #El manager crea los objetos, pero el entorno los conecta al RT.
-        self.rt.attach_receivers(self.receptores.positions_xyz())
+        self.rt.attach_receivers(self.mobility_manager.get_positions_xyz())
 
         #Se expone el simulador para visualización externa
         self.sfm_sim = self.mobility_manager.sfm_sim
@@ -202,7 +203,7 @@ class DroneEnv(gym.Env):
         #Se borran las referencias gráficas para evitar superposiciones en nuevos episodios
         self._init_render_vars()
         self._last_ue_metrics = []
-        self.num_ut = self.receptores.n
+        self.num_ut = len(self.receptores)
         self.dron_Realista.reset()
 
         return obs, info
@@ -212,7 +213,7 @@ class DroneEnv(gym.Env):
 
 
         #1.Movimiento del Dron
-        movimiento_normalizado = self.dron_Realista.step_move(action, dt=0.1)
+        movimiento_normalizado = self.dron_Realista.step_move(action, dt=self.sim_dt)
         movimiento_valido = self.rt.is_move_valid(self.rt.tx.position, movimiento_normalizado )
         drone_velocity_mps = self.dron_Realista.get_velocity()
           
@@ -220,7 +221,7 @@ class DroneEnv(gym.Env):
 
         #2.Movimiento de Receptores
         #SFM + Control Reactivo + Doppler + Validación
-        self.mobility_manager.step(dt=0.1)
+        self.mobility_manager.step()
 
         #3.Métricas y Sionna SYS
         info = self._get_metrics_info()
