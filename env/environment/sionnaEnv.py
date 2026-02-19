@@ -252,12 +252,12 @@ class SionnaRT:
                  specular_reflection: bool = True,# Reflexiones especulares (reflexiones tipo espejo)
                  diffuse_reflection: bool = True, # Reflexiones difusas, por superficies rugosas (muy costoso, realista)
                  refraction: bool = True,         # Refracción (atravesar vidrios, etc. cambiar angulo y atenuar)
-                 diffraction: bool = False,  # Difracción, activador general
-                 edge_diffraction: bool = False,  # Difracción en aristas y esquinas
-                 diffraction_lit_region: bool = False,
+                 diffraction: bool = True,  # Difracción, activador general
+                 edge_diffraction: bool = True,  # Difracción en aristas y esquinas
+                 diffraction_lit_region: bool = True,
                  synthetic_array: bool = False,   # True: matriz sintética (rápido); False: por elemento (en false realista)
-                 samples_per_src: int = 500_000,    # Nº de rayos por fuente (default 1,000,000)
-                 max_num_paths_per_src: int = 500_000,  # Tope de caminos por fuente (None => default) (default 1000000)
+                 samples_per_src: int = 1_000_000,    # Nº de rayos por fuente (default 1,000,000)
+                 max_num_paths_per_src: int = 1_000_000,  # Tope de caminos por fuente (None => default) (default 1000000)
                  seed: int = 41,                   # Semilla del muestreo estocástico
 
 
@@ -665,11 +665,22 @@ class SionnaRT:
             print("preview() requiere Jupyter. Usa render_scene_to_file().", e)
 
     def render_scene_to_file(self, filename: str = "scene.png",
-                             resolution: tuple[int, int] = (900, 700),
+                             resolution: tuple[int, int] = (900, 700), #900,700
                              with_radio_map: bool = False) -> bool:
         assert self.scene is not None, "Scene no inicializada."
 
         cam = self._auto_camera()
+
+        # Aumentar tamaño de transmisor y receptor para visualización (scena de usach)
+        aumentar = False
+        if (aumentar):
+            for rx in self.scene.receivers.values():
+                rx.display_radius = 5
+                #rx.color = (0, 0.9, 1)
+
+            for tx in self.scene.transmitters.values():
+                tx.display_radius = 5
+
         try:
             if with_radio_map:
                 rm_solver = RadioMapSolver()
@@ -1161,6 +1172,13 @@ class SionnaRT:
 
     # ---- Métricas adicionales Calculo teorico de Pr----
 
+    # --- Distancia TX->cada RX (en metros) ---
+    def compute_tx_rx_distances(self) -> np.ndarray:
+        assert self.txs and self.rx_list, "Faltan TX y/o RX. Llama a build_scene() y attach_receivers()."
+        txp = np.array(self.txs[0].position, dtype=float)
+        rxp = np.array([list(rx.position) for rx in self.rx_list], dtype=float)
+        d = np.linalg.norm(rxp - txp, axis=1)
+        return d
 
     # --- PRx teórico (Goldsmith 2.40): Pt_dBm + K_dB - 10*gamma*log10(d/d0) ---
     def compute_prx_dbm_theoretical(self,
@@ -1175,7 +1193,7 @@ class SionnaRT:
         """
         # parámetros por defecto desde el sistema si existen
         if gamma is None:
-            gamma = getattr(self, "pathloss_gamma", 2.0)
+            gamma = getattr(self, "pathloss_gamma", 3.0)
         if Gt_dBi is None:
             Gt_dBi = float(getattr(self, "tx_gain_dbi", 0.0))
         if Gr_dBi is None:

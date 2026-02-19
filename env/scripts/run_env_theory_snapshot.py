@@ -15,44 +15,50 @@ from env.environment.gymnasium_env import DroneEnv
 
 # === Configuración del escenario (edita aquí si quieres) ===
 SCENE = "simple_street_canyon_with_cars"
-DRONE_START = (0.0, 0.0, 20.0)
+DRONE_START = (0.0, 0.0, 15.0)
 RX_POSITIONS = [
-    (-50.0, 0.0, 1.5),
-    (0.0,   30.0, 1.5),
-    ( 20.0,  -30.0, 1.5),
-    (80.0,   40.0, 1.5),
-    (  50.0,    0.0, 1.5),
-    (90, -55, 1.5),
+    (-80.0,    -55.0, 1.5),    
+    (20.0, -30.0, 1.5),
+    (50.0, 0.0, 1.5),
 ]
 ANTENNA_MODE = "ISO"
+NUM_AGENTS = len(RX_POSITIONS)
 
 # RF
-FREQ_MHZ     = 39999 #28_000.0     # Frecuencia en MHz de transmisor
+FREQ_MHZ     = 28000 #28_000.0     # Frecuencia en MHz de transmisor
 TX_POWER_DBM = 30.0               # Potencia de transmisión en dBm
 NOISE_FIG_DB = 7.0                # Figura de ruido en dB
 B_HZ         = 20e6               # Ancho de banda en Hz
 
 # Parámetros Goldsmith cálculo teórico
-GAMMA = 2.0                     # Exponente de pérdida (2 en espacio libre) (2.7-3.5 en ciudad pequeña) (valores en libros)
+GAMMA = 3.5                    # Exponente de pérdida (2 en espacio libre) (2.7-3.5 en ciudad pequeña) (valores en libros)
 D0_M  = 1.0                     # Distancia de referencia en metros, para calibracion 
 GT_DBI = 0.0                    # Ganancia antena TX en dBi
 GR_DBI = 0.0                    # Ganancia antena RX en dBi
 
 if __name__ == "__main__":
     start_time = time.perf_counter()
+    mode_set_vuelo = 7
 
     env = DroneEnv(
         render_mode="human",            # no usaremos el render interno, pero deja 'human'
         scene_name=SCENE,
         max_steps=1,                    # sin movimiento
+        frequency_mhz=FREQ_MHZ,
         drone_start=DRONE_START,
         rx_positions=RX_POSITIONS,
+        rx_goals=RX_POSITIONS,
+        num_agents=NUM_AGENTS,
         antenna_mode=ANTENNA_MODE,      # "ISO" o "SECTOR3_3GPP"
-        frequency_mhz=FREQ_MHZ,
         tx_power_dbm=TX_POWER_DBM,
-        noise_figure_db=NOISE_FIG_DB,
+        #noise_figure_db=NOISE_FIG_DB,
         bandwidth_hz=B_HZ,
+        run_metrics=False,
+        step_durations = 0.1,
+        mode_set_vuelo=mode_set_vuelo,
     )
+
+    
 
     # Inicializa escena (no step)
     obs, info = env.reset(seed=0)
@@ -64,6 +70,8 @@ if __name__ == "__main__":
     # Render estático dual
     env.render_dual_snapshot(prx_teo, prx_real)
 
+    print(prx_teo)
+    print(prx_real)
     env.close()
     elapsed = time.perf_counter() - start_time
     print(f"Snapshot dual listo. Tiempo total: {elapsed:.3f} s")

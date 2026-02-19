@@ -1,0 +1,17 @@
+===== RESUMEN DE MOVIMIENTO =====
+Generado: 2026-01-13 19:33:44
+Archivo: movimiento_20260113-193038.txt
+
+=== Configuración global ===
+Escena: xx-aaa.xml
+Frecuencias usadas: 3500 MHz
+Posición inicial del dron [x,y,z] (m): (-400.0, -250.0, 40.0)
+Receptores (UEs) definidos: 0
+Max steps: 150
+
+=== Movimiento ===
+Modo de movimiento: Mode 
+Tipo de movimiento: Velocidad fija de [vx: 5.0, vy: 0.0, vz: 10 metros] m/s
+Velocidades usadas:
+Velocidad por defecto, maxima por eje 10m/s
+Velocidad por defecto, minima por eje -10m/s
