@@ -40,8 +40,9 @@ from env.environment.gymnasium_env import DroneEnv  # adapta si tu ruta difiere
 
 
 # ========= Configuración =========
-SCENE = "simple_street_canyon"  # p.ej. "xx-aaa.xml", "munich" "simple_street_canyon"
-DRONE_START = (-80.0, 0.0, 15.0)
+SCENE = "munich"  # p.ej. "santiago.xml", "munich" "simple_street_canyon"
+#SCENE = str(project_root / "Mapas-pruebas" / "xx-aaa.xml")
+DRONE_START = (40.0, 100.0, 10.0)
 
 #Semilla (seed) de la simulación
 SEMILLA = 0
@@ -50,19 +51,16 @@ SEMILLA = 0
 DT = 0.1
 
 #Cantidad de agentes a generar aleatoriamente
-NUM_AGENTS = 3
+NUM_AGENTS = 5
 
 #Posiciones iniciales
+#RX_POSITIONS = None
 RX_POSITIONS = [
-    #(-50.0, 0.0, 1.5),
-    (-80.0,    -55.0, 1.5),    
-    (20.0, -30.0, 1.5),
-    (50.0, 0.0, 1.5),
-    #(-20.0, 0.0, 1.5),
-    #(-1.0, 0.0, 1.5),
-    #(0.0,   30.0, 1.5),
-    #(0.0,  -30.0, 1.5),
-    #(80.0,   40.0, 1.5),
+    (150.0, 200.0, 1.5),
+    (180.0, 200.0, 1.5),
+    (-100.0, -70.0, 1.5),
+    (250.0, 140.0, 1.5),
+    (220.0, 150.0, 1.5)
 ]
 """
 [
@@ -77,27 +75,20 @@ RX_POSITIONS = [
     (150.0,   50.0, 1.5),   # Rx8: Casas
 ]
 
-"""
-
-
 #Metas de los receptores
-RX_GOALS =[
-    #(-50.0, 0.0, 1.5),
-    (-80.0,    -55.0, 1.5),    
-    (20.0, -30.0, 1.5),
-    (50.0, 0.0, 1.5),
-    #(-20.0, 0.0, 1.5),
-    #(-1.0, 0.0, 1.5),
-    #(0.0,   30.0, 1.5),
-    #(0.0,  -30.0, 1.5),
-    #(80.0,   40.0, 1.5),
+RX_GOALS = [
+    (25.0, 70.0, 1.5),
+    (25.0, 70.0, 1.5),
+    (25.0, 70.0, 1.5),
+    (25.0, 70.0, 1.5),
+    (25.0, 70.0, 1.5),
 ]
 
 
 
 
 #Máximo de pasos para la simulación (N° de steps de la simulación)
-MAX_STEPS = 500
+MAX_STEPS = 3500
 
 # Compara dos frecuencias (en MHz). Cambia a lo que necesites.
 FREQS_MHZ = [3500.0] #28000
@@ -105,8 +96,9 @@ FREQ_LABELS = [f"{f:.0f} MHz" for f in FREQS_MHZ]
 
 # Carpeta de salida con timestamp
 RUN_TAG = datetime.now().strftime("%Y%m%d-%H%M%S")
-#OUT_DIR = Path(project_root) / "Pruebas fusión" / f"METRICS_{RUN_TAG}_{SCENE}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps"
-OUT_DIR = Path(project_root) / "Victor tesis" / f"METRICS_{RUN_TAG}_{SCENE}_{MAX_STEPS} steps_pruebas usach"
+scene_clean = Path(SCENE).stem
+OUT_DIR = Path(project_root) / "Pruebas fusión" / f"METRICS_{RUN_TAG}_{scene_clean}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps"
+#OUT_DIR = Path(project_root) / "Pruebas fusión" / f"METRICS_{RUN_TAG}_Universidad de Santiago de Chile_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 OUT_DIR_MOV_DRONE = OUT_DIR / "1- trayectoria-dron"
@@ -245,6 +237,8 @@ def plot_trajectories_xy_xz(tracks, obstacles, scene_bounds, out_path, freq_mhz,
     # --- PLANTA (XY) ---
     ax_xy.set_title(f"Escenario: {SCENE}\nFrecuencia: {freq_mhz:.0f} MHz | {num_agents} Agentes | Semilla N° {seed} ({T-1} pasos)",
                     pad=12, fontsize=14, weight='bold')
+    #ax_xy.set_title(f"Escenario: Universidad de Santiago de Chile\nFrecuencia: {freq_mhz:.0f} MHz | {num_agents} Agentes | Semilla N° {seed} ({T - 1} pasos)",
+        #pad=12, fontsize=14, weight='bold')
     ax_xy.set_xlabel("X [m]", fontsize=12)
     ax_xy.set_ylabel("Y [m]", fontsize=12)
     ax_xy.set_aspect("equal", adjustable='datalim')
@@ -380,6 +374,11 @@ def make_gif(tracks, obstacles, scene_bounds, out_path, fps=20):
         f"Escenario: {SCENE} | {N} Agentes | Semilla N° {SEMILLA} ({T-1} pasos)",
         pad=12, fontsize=14, weight='bold'
     )
+    #ax.set_title(
+        #f"Simulación Dinámica (Sionna + SocialForce)\n"
+        #f"Escenario: Universidad de Santiago de Chile | {N} Agentes | Semilla N° {SEMILLA} ({T - 1} pasos)",
+        #pad=12, fontsize=14, weight='bold'
+    #)
     ax.grid(True, alpha=0.3)
 
     # --- Obstáculos ---
@@ -1656,7 +1655,8 @@ def run_episode(freq_mhz: float) -> dict:
     drone_traj, ue_traj, steps = [], [], []
 
    
-    out_img = OUT_DIR / f"radio_map_{SCENE}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.png"
+    out_img = OUT_DIR / f"radio_map_{scene_clean}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.png"
+    #out_img = OUT_DIR / f"radio_map_Universidad de Santiago de Chile_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.png"
     env.rt.render_scene_to_file(filename=str(out_img), with_radio_map=True)
 
     t = 0
@@ -1670,7 +1670,7 @@ def run_episode(freq_mhz: float) -> dict:
 
         
         
-        a = [0.0, 40.0, 0.0, 15.0]
+        a = [40.0, 100.0, 0.0, 10.0]
         b = [0, 0, 0]
 
         obs, rew, done, trunc, info = env.step(a, b)
@@ -1821,14 +1821,15 @@ def main():
         bounds = r["bounds"]
 
         #1. Plot Estático
-        out_traj = OUT_DIR / f"traj_static_{SCENE}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.png"
+        out_traj = OUT_DIR / f"traj_static_{scene_clean}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.png"
+        #out_traj = OUT_DIR / f"traj_static_Universidad de Santiago de Chile_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.png"
         plot_trajectories_xy_xz(tracks, obstacles, bounds, out_path=out_traj,
                                 freq_mhz=fmhz, num_agents=NUM_AGENTS, seed=SEMILLA)
         print(f"Imagen guardada: {out_traj}")
 
         #2. GIF
-        
-        out_gif = OUT_DIR / f"animacion_{SCENE}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.gif"
+        out_gif = OUT_DIR / f"animacion_{scene_clean}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.gif"
+        #out_gif = OUT_DIR / f"animacion_Universidad de Santiago de Chile_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.gif"
         print("Generando GIF...")
         #make_gif(tracks, obstacles, bounds, out_path=out_gif)
         print(f"GIF guardado: {out_gif}")
