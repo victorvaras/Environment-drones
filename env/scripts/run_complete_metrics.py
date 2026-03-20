@@ -62,6 +62,18 @@ RX_POSITIONS = [
     (250.0, 140.0, 1.5),
     (220.0, 150.0, 1.5)
 ]
+"""
+[
+    (-500.0, -250.0, 1.5),  # Rx0: Estadio
+    (-170.0, -220.0, 1.5),  # Rx1: DIINF
+    (90.0,  -250.0, 1.5),   # Rx2: Eléctrica
+    (270.0, -130.0, 1.5),   # Rx3: Casa Central
+    (230.0,  160.0, 1.5),   # Rx4: Derecho
+    (360.0,  220.0, 1.5),   # Rx5: Ciencias Médicas
+    (500.0, -255.0, 1.5),   # Rx6: Pabellón Forma
+    (230.0,   45.0, 1.5),   # Rx7: Facultad de Ingeniería
+    (150.0,   50.0, 1.5),   # Rx8: Casas
+]
 
 #Metas de los receptores
 RX_GOALS = [
@@ -71,6 +83,7 @@ RX_GOALS = [
     (25.0, 70.0, 1.5),
     (25.0, 70.0, 1.5),
 ]
+
 
 
 
@@ -1598,7 +1611,7 @@ def plot_slope_all_ues_onefig(df_all: pd.DataFrame, freq_mhz: float, out_dir: Pa
     plt.close(fig)
 
 
-
+from time import perf_counter
 
 def run_episode(freq_mhz: float) -> dict:
 
@@ -1648,6 +1661,7 @@ def run_episode(freq_mhz: float) -> dict:
 
     t = 0
     contador = 0
+    t_loop0 = perf_counter()
     while not (done or trunc):
         # snapshot antes del step
         drone_traj.append(_get_drone_xyz(env.rt).copy())
@@ -1673,14 +1687,9 @@ def run_episode(freq_mhz: float) -> dict:
         steps_tbler_running.append(list(tbler_running) if tbler_running is not None else [np.nan]*NUM_AGENTS)
 
         t += 1
+    t_loop = perf_counter() - t_loop0
+    print(f"Loop wall-clock (mientras ejecuta steps): {t_loop:.6f} s")
 
-        """ Validacion para probar reset dentro del episodio
-        if (done or trunc) and contador == 0:
-            obs, info = env.reset(seed=SEMILLA + 1)
-            done = trunc = False
-            contador += 1
-
-        """
 
     # snapshot final
     drone_traj.append(_get_drone_xyz(env.rt).copy())
@@ -1822,9 +1831,10 @@ def main():
         out_gif = OUT_DIR / f"animacion_{scene_clean}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.gif"
         #out_gif = OUT_DIR / f"animacion_Universidad de Santiago de Chile_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.gif"
         print("Generando GIF...")
-        make_gif(tracks, obstacles, bounds, out_path=out_gif)
+        #make_gif(tracks, obstacles, bounds, out_path=out_gif)
         print(f"GIF guardado: {out_gif}")
         
+
     #Doppler
     for f in FREQS_MHZ:
         plot_fd_all_ues_onefig(df_all, f, OUT_DIR_DOPPLER)

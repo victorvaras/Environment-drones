@@ -24,12 +24,12 @@ from env.environment.droneVelocityEnv import DroneVelocityEnv, DroneVelocityEnvC
 # Si corres este script directamente desde /mnt/data, puedes hacer:
 # from drone_velocity_env import DroneVelocityEnv, DroneVelocityEnvConfig
 
-OUT_DIR = Path.cwd() / "Environment drones" / "salidas_pyflyt-3" 
+OUT_DIR = Path.cwd() / "Environment-drones" / "victor" / "pruebas_trayectoria_dron_v2" / "mode_7"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def main():
-    SELECT_MODE = 6 # cambia a 4 o 7 para probar otros
+    SELECT_MODE = 7 # cambia a 4 o 7 para probar otros
 
     cfg = DroneVelocityEnvConfig(
         start_xyz=( 0.0, 0.0, 15.0),
@@ -48,8 +48,14 @@ def main():
 
         #SELECT_MODE = 64
 
-        if SELECT_MODE == 0:
-            mov = [0.0, 0.30, 0.0, 1.0]
+        if SELECT_MODE == -1:
+            mov = [0.5, 0.48, 0.5, 0.5]
+            dt = 0.1
+            for _ in range(100):
+                env.step_move(mov, dt)
+
+        elif SELECT_MODE == 0:
+            mov = [0.1, 0.05, 0.0, 13.0]
             dt = 0.1
             for _ in range(100):
                 env.step_move(mov, dt)
@@ -74,21 +80,20 @@ def main():
 
 
         elif SELECT_MODE == 4:
-            # Modo 4: [u, v, vr, z]  (u,v en cuerpo; z absoluto en mundo)
-            seq4 = [
-                ([0.0, 0.0, 0.0, 15.0], 5.0),     # hover en z=5
-                ([5.0, 0.0, 0.0, 15.0], 5.0),     # avanzar en u
-                ([0.0, 0.0, 0.0, 15.0], 50.0),     # derecha y subir a z=6.5
-                ([0.0, 0.0, 5.0, 15.0], 5.0),     # girar en sitio
-                ([0.0, 0.0, 0.0, 15.0], 50.0),     # bajar a z=5
-                ([5.0, 0.0, 0.0, 15.0], 5.0),
-            ]
-            # env.step_sequence_mode4(seq4)
+            # Modo 4: [u, v, vr, z]  (u,v en cuerpo; z absoluto en mundo)            
 
-            mov = [5.0, 0.0, 0.0, 15.0]
+            mov_1 = [5.0, 0.0, 0.0, 15.0]
             dt = 0.1
-            for _ in range(100):
-                env.step_move(mov, dt) 
+            for _ in range(50):
+                env.step_move(mov_1, dt)
+
+            mov_2 = [0.0, 5.0, 0.0, 15.0]
+            for _ in range(50):
+                env.step_move(mov_2, dt)
+
+            mov_3 = [-5.0, -5.0, 0.0, 15.0]
+            for _ in range(50):
+                env.step_move(mov_3, dt) 
 
 
         elif SELECT_MODE == 5:
@@ -109,19 +114,13 @@ def main():
         
         elif SELECT_MODE == 7:
             # Modo 7: [x, y, r, z] (setpoint de posición absoluta en mundo)
-            seq7 = [
-                ([0.0, 0.0, 0.0, 15.0], 10.0),     # ir a (0,0,15)
-                ([25.0, 0.0, 0.0, 15.0], 10.0),     # ir a (5,0,15)
-                ([25.0, 25.0, 0.0, 15.0], 10.0),     # ir a (5,5,15) con yaw≈1.2 rad
-                ([25.0, 25.0, 0.0, 15.0], 10.0),
-                ([0.0, 0.0, 0.0, 15.0], 10.0), 
-            ]
-            #env.step_sequence_mode7(seq7)
+            
+            mov_1 = [200.0, 0.0, 0.0, 15.0] 
+            dt = 15.0
+            env.step_move(mov_1, dt)
 
-
-            mov = [20.0, 10.0, 0.0, 15.0] 
-            dt = 30.0
-            env.step_mode7(mov, dt)
+            mov_2 = [0.0, -50.0, 0.0, 15.0]
+            env.step_move(mov_2, dt)
 
         elif SELECT_MODE == 61:
             # --- Trayectoria circular mínima con un for ---
