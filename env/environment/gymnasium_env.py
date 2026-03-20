@@ -221,7 +221,7 @@ class DroneEnv(gym.Env):
 
         #2.Movimiento de Receptores
         #SFM + Control Reactivo + Doppler + Validación
-        self.mobility_manager.step()
+        #self.mobility_manager.step()
 
         #3.Métricas y Sionna SYS
         info = self._get_metrics_info()
@@ -591,118 +591,220 @@ class DroneEnv(gym.Env):
         elif self.render_mode == "rgb_array":
             info["frame"] = self._render_to_array()
 
-    """
-    # ================= Render avanzado (dual snapshot) =================
-    # (puedes llamarlo desde fuera del entorno, pasando PRx teórico y real)
 
+    # ================= Render Profesional (Sin distinción LOS/NLOS) =================
     def render_dual_snapshot(self,
-                            prx_left,
-                            prx_right,
-                            title_left="PRx teórico (dBm)",
-                            title_right="PRx real Sionna (dBm)",
-                            show_values_in_labels=True):
+                                  prx_theory_dbm,
+                                  prx_rt_dbm,
+                                  title="Comparación de PRx: modelo teórico vs trazado de rayos",
+                                  left_label="Modelo teórico (referencia)",
+                                  right_label="Modelo por trazado de rayos (Sionna RT)",
+                                  draw_links_theory=True,   # líneas SOLO en teórico (izq)
+                                  draw_links_rt=False,      # RT (der) SIN líneas
+                                  save=True,
+                                  scene_pad_ratio=0.02):
         import numpy as np
         import matplotlib.pyplot as plt
+        from pathlib import Path
+        from matplotlib.colors import Normalize
+        from matplotlib.cm import ScalarMappable
+        from matplotlib.lines import Line2D
+        from datetime import datetime
 
-        prx_left  = np.asarray(prx_left, dtype=float).reshape(-1)
-        prx_right = np.asarray(prx_right, dtype=float).reshape(-1)
-        rx = self.receptores.positions_xyz()
-        drone_xy = (self.dron.pos[0], self.dron.pos[1])
-        d = np.asarray(self.rt.compute_tx_rx_distances(), dtype=float).reshape(-1)
+        # ----------------------------
+        # Inputs
+        # ----------------------------
+        prx_theory_dbm = np.asarray(prx_theory_dbm, dtype=float).reshape(-1)
+        prx_rt_dbm     = np.asarray(prx_rt_dbm,     dtype=float).reshape(-1)
 
-        # === Banner RF (f, Pt, NF, B) ===
-        try:
-            fc_ghz = float(getattr(self.rt, "freq_hz", np.nan)) / 1e9
-        except Exception:
-            fc_ghz = np.nan
-        try:
-            pt_dbm = float(getattr(self, "tx_power_dbm", np.nan))
-            if np.isnan(pt_dbm):
+        rx = np.asarray(self.mobility_manager.get_positions_xyz(), dtype=float)  # (N,3)
+        N = rx.shape[0]
+        assert prx_theory_dbm.size == N and prx_rt_dbm.size == N, \
+            "PRx debe tener largo N (nº de receptores)."
+
+        # ----------------------------
+        # Pose/posición del dron
+        # ----------------------------
+        pose = self.dron_Realista.get_pose()
+        if isinstance(pose, (list, tuple)) and len(pose) > 0:
+            pos = np.asarray(pose[0], dtype=float).reshape(-1)
+        else:
+            pos = np.asarray(pose, dtype=float).reshape(-1)
+
+        drone_xyz = np.array([pos[0], pos[1], pos[2] if pos.size >= 3 else 0.0], dtype=float)
+        h_tx = float(drone_xyz[2]) if np.isfinite(drone_xyz[2]) else np.nan
+
+        # ----------------------------
+        # Distancia 3D (para tabla)
+        # ----------------------------
+        d3d = np.linalg.norm(rx[:, :3] - drone_xyz[:3], axis=1)
+
+        # ----------------------------
+        # Parámetros RF (SOLO f y Pt)
+        # ----------------------------
+        def _get_float(obj, name, default=np.nan):
+            try:
+                return float(getattr(obj, name, default))
+            except Exception:
+                return default
+
+        fc_ghz = _get_float(self.rt, "freq_hz", np.nan) / 1e9
+
+        pt_dbm = _get_float(self, "tx_power_dbm", np.nan)
+        if np.isnan(pt_dbm):
+            try:
                 pt_dbm = float(self.rt._total_tx_power_dbm())
-        except Exception:
-            pt_dbm = float(self.rt._total_tx_power_dbm())
-        try:
-            nf_db = float(getattr(self, "noise_figure_db", np.nan))
-        except Exception:
-            nf_db = np.nan
-        try:
-            bw_mhz = float(getattr(self, "bandwidth_hz", np.nan)) / 1e6
-        except Exception:
-            bw_mhz = np.nan
+            except Exception:
+                pt_dbm = np.nan
 
-        rf_str = "RF: "
         rf_parts = []
-        rf_parts.append(f"f={fc_ghz:.3f} GHz" if not np.isnan(fc_ghz) else "f=N/A")
-        rf_parts.append(f"Pt={pt_dbm:.1f} dBm" if not np.isnan(pt_dbm) else "Pt=N/A")
-        rf_parts.append(f"NF={nf_db:.1f} dB" if not np.isnan(nf_db) else "NF=N/A")
-        rf_parts.append(f"B={bw_mhz:.1f} MHz" if not np.isnan(bw_mhz) else "B=N/A")
-        rf_str += " | ".join(rf_parts)
+        rf_parts.append(f"f={fc_ghz:.3f} GHz" if np.isfinite(fc_ghz) else "f=N/A")
+        rf_parts.append(f"Pt={pt_dbm:.1f} dBm" if np.isfinite(pt_dbm) else "Pt=N/A")
+        rf_str = " | ".join(rf_parts)
 
-        # Escala común para comparación justa
-        vmin = float(np.nanmin([prx_left.min(), prx_right.min()]))
-        vmax = float(np.nanmax([prx_left.max(), prx_right.max()]))
+        # ----------------------------
+        # Bounds de escena (x/y) para grilla y márgenes
+        # ----------------------------
+        def _get_scene_bounds_xy():
+            sb = getattr(self, "scene_bounds", None)
+            if sb is None and hasattr(self, "rt") and hasattr(self.rt, "scene_bounds"):
+                sb = ((self.rt.scene_bounds[0][0], self.rt.scene_bounds[1][0]),
+                    (self.rt.scene_bounds[0][1], self.rt.scene_bounds[1][1]),
+                    (self.rt.scene_bounds[0][2], self.rt.scene_bounds[1][2]))
+            if sb is None:
+                return None
+            (xmin, xmax), (ymin, ymax), _ = sb
+            return float(xmin), float(xmax), float(ymin), float(ymax)
 
-        # Figura 1x3: izq (teo), centro (tabla abajo), der (real)
-        fig = plt.figure(figsize=(15, 6), dpi=110)
-        gs = fig.add_gridspec(1, 3, width_ratios=[1.0, 0.8, 1.0], wspace=0.15)
+        def _apply_scene_bounds(ax, pad_ratio=0.02):
+            xy = _get_scene_bounds_xy()
+            if xy is None:
+                return
+            xmin, xmax, ymin, ymax = xy
+            dx = (xmax - xmin) * pad_ratio
+            dy = (ymax - ymin) * pad_ratio
+            ax.set_xlim(xmin - dx, xmax + dx)
+            ax.set_ylim(ymin - dy, ymax + dy)
+
+        # ----------------------------
+        # Escala de color común
+        # ----------------------------
+        vmin = float(np.nanmin([np.nanmin(prx_theory_dbm), np.nanmin(prx_rt_dbm)]))
+        vmax = float(np.nanmax([np.nanmax(prx_theory_dbm), np.nanmax(prx_rt_dbm)]))
+        norm = Normalize(vmin=vmin, vmax=vmax)
+        cmap = "viridis"
+
+        # ----------------------------
+        # Figura: 2 mapas + tabla
+        # ----------------------------
+        fig = plt.figure(figsize=(14.5, 7.5), dpi=120)
+        gs = fig.add_gridspec(2, 2, height_ratios=[1.0, 0.42], hspace=0.10, wspace=0.18)
+
         axL = fig.add_subplot(gs[0, 0])
-        axC = fig.add_subplot(gs[0, 1])
-        axR = fig.add_subplot(gs[0, 2])
+        axR = fig.add_subplot(gs[0, 1])
+        axT = fig.add_subplot(gs[1, :])
+        axT.axis("off")
 
-        # --- Panel izquierdo: Teórico ---
-        scL = axL.scatter(rx[:,0], rx[:,1], c=prx_left, s=80, cmap="viridis", vmin=vmin, vmax=vmax)
-        axL.scatter([drone_xy[0]], [drone_xy[1]], marker="^", s=150, edgecolors="k", facecolors="none", label="Dron")
-        for i, (x, y, _) in enumerate(rx):
-            label = f"Rx{i}" if not show_values_in_labels else f"Rx{i}\n{prx_left[i]:.1f} dBm"
-            axL.text(x + 1, y + 1, label, fontsize=8, weight="bold")
-        axL.set_aspect("equal", adjustable="box")
-        axL.set_title(title_left)
-        # Banner RF debajo del título
-        axL.text(0.5, 1.3, rf_str, transform=axL.transAxes, ha="center", va="bottom", fontsize=9)
-        axL.set_xlabel("x [m]"); axL.set_ylabel("y [m]")
-        axL.grid(True, alpha=0.3)
-        fig.colorbar(scL, ax=axL, label="dBm")
-        axL.legend(loc="upper right")
+        fig.suptitle(title, y=0.98, fontsize=14, weight="bold")
+        fig.text(0.5, 0.945, rf_str, ha="center", va="center", fontsize=9)
 
-        # --- Panel central: “tabla” abajo (distancia + PRx teo/real) ---
-        axC.axis("off")
-        lines = [
-            f"Rx{i:02d}  d={d[i]:6.2f} m   Teo={prx_left[i]:7.2f} dBm   Real={prx_right[i]:7.2f} dBm"
-            for i in range(len(d))
+        # ----------------------------
+        # Leyenda: altura del dron + receptores
+        # ----------------------------
+        tx_label = f"Tx (Dron)  z={h_tx:.1f} m" if np.isfinite(h_tx) else "Tx (Dron)"
+        legend_handles = [
+            Line2D([0], [0], marker="^", linestyle="None", markerfacecolor="none",
+                markeredgecolor="k", markersize=10, label=tx_label),
+            Line2D([0], [0], marker="o", linestyle="None", markerfacecolor="none",
+                markeredgecolor="k", markersize=8, label="Rx (Receptores)")
         ]
-        # título arriba para el panel central
-        axC.set_title("Distancia y PRx por receptor", y=0.98)
-        # texto anclado ABAJO al centro
-        axC.text(0.5, 0.02, "\n".join(lines), ha="center", va="bottom",
-                transform=axC.transAxes, family="monospace", fontsize=10)
 
-        # --- Panel derecho: Real (Sionna RT) ---
-        scR = axR.scatter(rx[:,0], rx[:,1], c=prx_right, s=80, cmap="viridis", vmin=vmin, vmax=vmax)
-        axR.scatter([drone_xy[0]], [drone_xy[1]], marker="^", s=150, edgecolors="k", facecolors="none", label="Dron")
-        for i, (x, y, _) in enumerate(rx):
-            label = f"Rx{i}" if not show_values_in_labels else f"Rx{i}\n{prx_right[i]:.1f} dBm"
-            axR.text(x + 1, y + 1, label, fontsize=8, weight="bold")
-        axR.set_aspect("equal", adjustable="box")
-        axR.set_title(title_right)
-        # Banner RF debajo del título
-        axR.text(0.5, 1.3, rf_str, transform=axR.transAxes, ha="center", va="bottom", fontsize=9)
-        axR.set_xlabel("x [m]"); axR.set_ylabel("y [m]")
-        axR.grid(True, alpha=0.3)
-        fig.colorbar(scR, ax=axR, label="dBm")
-        axR.legend(loc="upper right")
+        # ----------------------------
+        # Panel plot
+        # ----------------------------
+        def _plot_panel(ax, prx_dbm, panel_title, draw_links):
+            # Líneas Tx->Rx (solo si se pide)
+            if draw_links:
+                for i in range(N):
+                    ax.plot([drone_xyz[0], rx[i, 0]],
+                            [drone_xyz[1], rx[i, 1]],
+                            linestyle="-", linewidth=1.0, alpha=0.18, color="black")
 
-        # === Guardado automático ===
-        # Carpeta con el nombre que pediste
-        out_dir = Path("Environment drones/comparacion PRx teorico real")
-        out_dir.mkdir(parents=True, exist_ok=True)
+            # Receptores (coloreados por PRx)
+            ax.scatter(rx[:, 0], rx[:, 1],
+                    c=prx_dbm, s=90, cmap=cmap, norm=norm,
+                    edgecolors="k", linewidths=0.5)
 
-        # Nombre termina en _<frecuencia>
-        freq_suffix = f"{fc_ghz:.3f}GHz" if not np.isnan(fc_ghz) else "NA"
+            # Tx (dron)
+            ax.scatter([drone_xyz[0]], [drone_xyz[1]],
+                    marker="^", s=180, edgecolors="k",
+                    facecolors="none", linewidths=1.2)
 
-        filename = f"comparacion_prx_teo_real_{freq_suffix}.png"
+            # Etiquetas: Rx arriba + potencia abajo del punto
+            for i in range(N):
+                x, y = rx[i, 0], rx[i, 1]
+                ax.text(x + 1.2, y + 1.2, f"Rx{i}", fontsize=8, weight="bold")
+                ax.text(x + 1.2, y - 3.0, f"{prx_dbm[i]:.1f} dBm", fontsize=8)
 
-        fig.savefig(out_dir / filename, dpi=150, bbox_inches="tight")
+            ax.set_title(panel_title, fontsize=12, weight="bold")
+            ax.set_aspect("equal", adjustable="box")
+            ax.set_xlabel("x [m]")
+            ax.set_ylabel("y [m]")
+
+            # Aplicar límites de escena (para que la grilla tome márgenes de la escena)
+            _apply_scene_bounds(ax, pad_ratio=scene_pad_ratio)
+
+            ax.grid(True, alpha=0.25)
+            ax.legend(handles=legend_handles, loc="upper right")
+
+        _plot_panel(axL, prx_theory_dbm, left_label, draw_links_theory)
+        _plot_panel(axR, prx_rt_dbm,     right_label, draw_links_rt)   # RT sin líneas
+
+        # Colorbar única compartida
+        sm = ScalarMappable(norm=norm, cmap=cmap)
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=[axL, axR], fraction=0.046, pad=0.02)
+        cbar.set_label("PRx [dBm]")
+
+        # ----------------------------
+        # Tabla inferior (SIN d2D)
+        # ----------------------------
+        delta = prx_rt_dbm - prx_theory_dbm
+        col_labels = ["Rx", "d3D [m]", "PRx teo [dBm]", "PRx RT [dBm]", "Δ [dB]"]
+
+        cell_text = []
+        for i in range(N):
+            cell_text.append([
+                f"Rx{i:02d}",
+                f"{d3d[i]:.2f}",
+                f"{prx_theory_dbm[i]:.2f}",
+                f"{prx_rt_dbm[i]:.2f}",
+                f"{delta[i]:+.2f}",
+            ])
+
+        table = axT.table(cellText=cell_text,
+                        colLabels=col_labels,
+                        loc="center",
+                        cellLoc="center",
+                        colLoc="center")
+        table.auto_set_font_size(False)
+        table.set_fontsize(9)
+        table.scale(1, 1.25)
+
+        # ----------------------------
+        # Guardado
+        # ----------------------------
+        if save:
+            out_dir = Path("Environment-drones/figuras-comparacion-prx")
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            freq_suffix = f"{fc_ghz:.3f}GHz" if np.isfinite(fc_ghz) else "NA"
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            filename = f"{timestamp}_prx_comp_teo_vs_rt_{freq_suffix}.png"
+            fig.savefig(out_dir / filename, dpi=200, bbox_inches="tight")
 
         plt.show()
+        return fig
 
-    """
+
+    
