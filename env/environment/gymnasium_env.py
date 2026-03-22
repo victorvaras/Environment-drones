@@ -208,7 +208,7 @@ class DroneEnv(gym.Env):
 
         return obs, info
 
-    def step(self, action: np.ndarray, actionR: np.ndarray | None = None):
+    def step(self, action: np.ndarray):
         self.step_count += 1
 
 
@@ -221,7 +221,7 @@ class DroneEnv(gym.Env):
 
         #2.Movimiento de Receptores
         #SFM + Control Reactivo + Doppler + Validación
-        #self.mobility_manager.step()
+        self.mobility_manager.step()
 
         #3.Métricas y Sionna SYS
         info = self._get_metrics_info()
