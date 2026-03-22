@@ -1,0 +1,23 @@
+# --- Núcleo y Dependencias Base ---
+wheel
+numpy
+pandas
+matplotlib
+scipy
+torch
+
+# --- Inteligencia Artificial y Reinforcement Learning ---
+tensorflow
+gymnasium
+gymnasium[classic-control]
+
+# --- Simulación de Drones y Dinámica ---
+PyFlyt
+
+# --- Comunicaciones y Trazado de Rayos (Sionna) ---
+sionna
+sionna-vispy[recommended]
+sionna-rt
+
+# --- Modelado de Movimiento de Usuarios ---
+socialforce[dev,plot]
