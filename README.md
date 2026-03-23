@@ -60,9 +60,7 @@ sudo apt install -y python3.11 python3.11-venv python3.11-dev python3.11-distuti
 Clona este repositorio y crea un entorno virtual aislado:
 
 ```bash
-# Crear directorio de trabajo
-mkdir -p ~/proyectos_dron
-cd ~/proyectos_dron
+# Ubícate en la carpeta donde deseas clonar el proyecto.
 
 # Configurar entorno virtual (al mismo nivel que el repositorio)
 python3.11 -m venv venv
@@ -108,6 +106,47 @@ Si no se generan, o la ejecución falla, se recomienda:
 1. Instalar dependencias faltantes con `pip install -r requirements.txt`.
 2. Verificar que el entorno virtual esté activado.
 3. Ponerse en contacto con los desarrolladores del proyecto para soporte.
+
+### ⚠️ Solución de problemas con GPU (TensorFlow / CUDA)
+
+**Advertencia:** Si al ejecutar la prueba aparece un error similar a:
+
+```text
+error: libdevice not found at ./libdevice.10.bc
+tensorflow.python.framework.errors_impl.UnknownError:
+JIT compilation failed. [Op:Pow]
+```
+
+o mensajes relacionados con GPU, CUDA, XLA o TensorFlow, esto indica que el entorno no logró utilizar correctamente la GPU.
+
+**¿Qué significa?**
+
+Este problema suele ocurrir cuando TensorFlow no encuentra o no puede cargar correctamente las librerías necesarias para trabajar con GPU.
+Si deseas continuar ejecutando el proyecto sin usar GPU, puedes forzar la ejecución solo en CPU.
+
+**Ejecutar temporalmente solo con CPU**
+
+Usa el siguiente comando antes de ejecutar el script:
+
+```bash
+export CUDA_VISIBLE_DEVICES=""
+```
+
+Luego ejecuta normalmente la prueba:
+
+```bash
+python env/pruebas_funcionamiento/run_prueba_funcionamiento.py
+```
+
+**Ejecutar en una sola línea**
+
+También puedes hacerlo directamente así:
+
+```bash
+CUDA_VISIBLE_DEVICES="" python env/pruebas_funcionamiento/run_prueba_funcionamiento.py
+```
+
+**Nota:** Al trabajar solo con CPU, el proyecto debería ejecutarse sin este error, aunque el rendimiento puede ser más lento en comparación con una ejecución con GPU correctamente configurada. Si se dispone de una GPU NVIDIA, se sugiere mantener la ejecución con GPU operativa para obtener mejor rendimiento.
 
 ---
 
