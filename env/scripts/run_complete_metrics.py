@@ -1,4 +1,4 @@
-# run_compare_metrics.py
+# run_complete_metrics.py
 # -*- coding: utf-8 -*-
 
 # === Limpieza de logs===
@@ -40,7 +40,7 @@ from env.environment.gymnasium_env import DroneEnv  # adapta si tu ruta difiere
 
 
 # ========= Configuración =========
-SCENE = "munich"  # p.ej. "santiago.xml", "munich" "simple_street_canyon"
+SCENE = "simple_street_canyon"  # p.ej. "santiago.xml", "munich" "simple_street_canyon"
 #SCENE = str(project_root / "Mapas-pruebas" / "xx-aaa.xml")
 DRONE_START = (-85.0, 0.0, 10.0)
 
@@ -89,7 +89,7 @@ RX_GOALS = [
 
 
 #Máximo de pasos para la simulación (N° de steps de la simulación)
-MAX_STEPS = 3500
+MAX_STEPS = 10
 
 # Compara dos frecuencias (en MHz). Cambia a lo que necesites.
 FREQS_MHZ = [3500.0] #28000
@@ -98,7 +98,7 @@ FREQ_LABELS = [f"{f:.0f} MHz" for f in FREQS_MHZ]
 # Carpeta de salida con timestamp
 RUN_TAG = datetime.now().strftime("%Y%m%d-%H%M%S")
 scene_clean = Path(SCENE).stem
-OUT_DIR = Path(project_root) / "Pruebas fusión" / f"METRICS_{RUN_TAG}_{scene_clean}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps"
+OUT_DIR = Path(project_root) / "Resultados" /"Pruebas fusión" / f"METRICS_{RUN_TAG}_{scene_clean}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps"
 #OUT_DIR = Path(project_root) / "Pruebas fusión" / f"METRICS_{RUN_TAG}_Universidad de Santiago de Chile_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1672,9 +1672,8 @@ def run_episode(freq_mhz: float) -> dict:
         
         
         a = [40.0, 100.0, 0.0, 10.0]
-        b = [0, 0, 0]
 
-        obs, rew, done, trunc, info = env.step(a, b)
+        obs, rew, done, trunc, info = env.step(a)
 
         ue_metrics_step = info.get("ue_metrics", [])
         tbler_running   = info.get("tbler_running_per_ue", None)

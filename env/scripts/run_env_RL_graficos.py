@@ -172,7 +172,7 @@ def make_timing_plot_with_config(
 
 
 
-OUT_DIR = Path.cwd() / "Environment-drones" / "outputs-tiempos-tesis"
+OUT_DIR = Path.cwd() / "Resultados" /"Environment-drones" / "outputs-tiempos-tesis"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
