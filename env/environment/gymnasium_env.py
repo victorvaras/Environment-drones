@@ -1,6 +1,5 @@
-# -*- coding: utf-8 -*-
+#Importaciones
 from __future__ import annotations
-
 import sys
 from pathlib import Path
 
@@ -8,37 +7,42 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-# (Se mantiene para no romper ejecuciones fuera del paquete)
 project_root = Path(__file__).resolve().parents[2]
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-# Proyecto
+#LLamados del Proyecto
 from .sionnaEnv import SionnaRT
 from env.environment.droneVelocityEnv import DroneVelocityEnv, DroneVelocityEnvConfig
 from .receptores_mobility import ReceptorMobilityManager
 
-
 class DroneEnv(gym.Env):
-    """Entorno Gymnasium con Sionna RT (sin imagen de fondo)."""
+    """
+    Entorno personalizado de Gymnasium para optimización de redes UAV mediante RL.
+
+    Integra simulaciones electromagnéticas de alta fidelidad (Sionna Ray Tracing),
+    movilidad peatonal autónoma (Social Force Model) y dinámica de vuelo de drones.
+    El agente RL (Dron) debe aprender a navegar el espacio aéreo maximizando
+    la calidad de servicio de los usuarios terrestres.
+    """
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 15}
 
     def __init__(
             self,
-            step_durations: float = 0.1,
-            rx_positions: list[tuple[float, float, float]] | None = None,
-            rx_goals: list[tuple[float, float, float]] | None = None,
-            num_agents: int = 10,
+            step_durations: float = 0.1,                                    #Resolución temporal de la simulación
+            rx_positions: list[tuple[float, float, float]] | None = None,   #Posiciones iniciales de los receptores
+            rx_goals: list[tuple[float, float, float]] | None = None,       #Metas de los receptores
+            num_agents: int = 10,                                           #Número de receptores
             frequency_mhz: float = 3500.0,
             tx_power_dbm: float = 30.0,
             bandwidth_hz: float = 20e6,
             scene_name: str = "munich",
             antenna_mode: str = "ISO",
-            max_steps: int = 400,
+            max_steps: int = 400,                                           #Numero de steps para finalizar la simulación
             render_mode: str | None = None,
             drone_start: tuple[float, float, float] = (0.0, 0.0, 20.0),
-            run_metrics: bool = False,
-            mode_set_vuelo: int = 7,
+            run_metrics: bool = False,                                      #Si es False = simulación rápida, True = simulación completa
+            mode_set_vuelo: int = 7,                                        #Modo de vuelo del dron para la simulación
     ):
         super().__init__()
         assert render_mode in (None, "human", "rgb_array"), \
@@ -60,7 +64,7 @@ class DroneEnv(gym.Env):
             self.current_num_agents = num_agents
             using_manual_spawn = False #Se utilizara el SpawnManager
 
-        #Se guardan las referencias manuales para el reset
+        #Se guardan las referencias manuales para el reset de la simulación
         self._manual_rx_pos = rx_positions if using_manual_spawn else None
         self._manual_rx_goals = rx_goals if using_manual_spawn else None
 
@@ -127,9 +131,6 @@ class DroneEnv(gym.Env):
                         (self.rt.scene_bounds[0][2], self.rt.scene_bounds[1][2]))
         self.scene_bounds = scene_bounds
 
-        #Inicialización del Dron
-        
-
         #Espacios de Gymnasium (Espacios de Acción y Observación)
         self.action_space = spaces.Box(low=-5.0, high=5.0, shape=(3,), dtype=np.float32)
 
@@ -137,8 +138,6 @@ class DroneEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=-1e9, high=1e9, shape=(3 + self.current_num_agents,), dtype=np.float32
         )
-        
-
 
         #Inicializacion para movimiento de dron realista
         self.mode_set_vuelo = mode_set_vuelo  
@@ -162,24 +161,25 @@ class DroneEnv(gym.Env):
         #Variables de Renderizado
         self._init_render_vars()
 
-        # ================= Gym API =================
-
+    # ================= Gym API =================
     def reset(self, *, seed: int | None = None, options: dict | None = None):
+        """
+        Reinicia el entorno al estado inicial (t=0).
+        Purga las memorias físicas de Sionna, reubica al Dron y lanza un nuevo
+        ciclo de generación de receptores (UEs).
+        """
         super().reset(seed=seed)
         self.step_count = 0
-
-        #Reinicio del Dron y TX
-        
 
         #Sincronización con Sionna
         #Se mueve el transmisor a la posición inicial para que el cálculo sea correcto desde t=0
         self.dron_Realista.reset()
         self.rt.move_tx(self._start, (0.0, 0.0, 0.0))
 
-        #Se realiza la limpieza de los receptores viejos de Sionna antes de crear nuevos
+        #Se realiza la limpieza de los receptores previos de Sionna antes de crear nuevos
         self.rt.remove_receivers()
 
-        #Renicio de receptores (Manager)
+        #Reinicio de receptores (Manager)
         #El Manager se encarga de: Spawn, Metas, SFM Reset
         self.receptores = self.mobility_manager.reset(
             num_agents=self.current_num_agents,  #Número de receptores
@@ -209,8 +209,13 @@ class DroneEnv(gym.Env):
         return obs, info
 
     def step(self, action: np.ndarray):
-        self.step_count += 1
+        """
+        Ejecuta un paso o ciclo de la simulación.
 
+        1. Realiza el vuelo del dron (dron_Realista).
+        2. Utiliza la dinámica peatonal (SFM).
+        """
+        self.step_count += 1
 
         #1.Movimiento del Dron
         movimiento_normalizado = self.dron_Realista.step_move(action, dt=self.sim_dt)
@@ -225,7 +230,7 @@ class DroneEnv(gym.Env):
 
         #3.Métricas y Sionna SYS
         info = self._get_metrics_info()
-        # sys_metrics = self.rt.run_sys_step()
+        #sys_metrics = self.rt.run_sys_step()
 
         #Recompensa
         reward = 1.0
@@ -248,26 +253,32 @@ class DroneEnv(gym.Env):
 
         return obs, reward, terminated, truncated, info
 
-    # ================= Render helpers =================
+    # ================= Render helpers (Visualización y UI) =================
     def _ensure_figure(self):
+        """
+        Inicializa la figura de Matplotlib estructurada con GridSpec.
+
+        Se ejecuta una sola vez. Configura los lienzos para el mapa 2D,
+        la lista de posiciones y la tabla de métricas de telecomunicaciones.
+        """
         import matplotlib.pyplot as plt
         from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
         if self._fig is not None and self._ax_map is not None:
             return
 
-        # ---- define resolución exacta (cambia si quieres 1920x1080) ----
-        self.render_figsize = getattr(self, "render_figsize", (18, 8.5))  # pulgadas
-        self.render_dpi = getattr(self, "render_dpi", 120)  # 12.8*100=1280 px, 7.2*100=720 px
+        #Resolución optimizada para grabación de video
+        self.render_figsize = getattr(self, "render_figsize", (18, 8.5))  #Pulgadas
+        self.render_dpi = getattr(self, "render_dpi", 120)
 
-        # Usa constrained layout para que Matplotlib “reserve” espacio para la derecha y la colorbar
+        #constrained_layout evita superposición de ejes y barras de color
         self._fig = plt.figure(
             figsize=self.render_figsize,
             dpi=self.render_dpi,
-            layout="constrained"  # equivale a set_constrained_layout(True)
+            layout="constrained" #Equivale a set_constrained_layout(True)
         )
 
-        # === TÍTULO GLOBAL ===
+        # --- Encabezado Global ---
         antenna_mode = getattr(self.rt, "antenna_mode", "N/A")
         freq_mhz = getattr(self.rt, "freq_hz", 0) / 1e6
         tx_power = getattr(self.rt, "tx_power_dbm_total", 0)
@@ -285,19 +296,18 @@ class DroneEnv(gym.Env):
             y=0.98
         )
 
-        # Gridspec con espacio arriba
+        # --- Maquetación de la interfaz (GridSpec) ---
         gs = self._fig.add_gridspec(
             1, 2,
             width_ratios=[1.0, 1.2],
-            top=0.94  # deja espacio para el título
+            top=0.94
         )
 
-        # Gridspec principal
-        gs = self._fig.add_gridspec(1, 2, width_ratios=[1.0, 1.2])  # un poco más ancho el panel izquierdo
+        #Gridspec principal
+        gs = self._fig.add_gridspec(1, 2, width_ratios=[1.0, 1.2])
 
-        # Subgrilla izquierda (mapa + lista)
+        #Panel Izquierdo: Mapa 2D y log de posiciones
         gs_left = gs[0, 0].subgridspec(2, 1, height_ratios=[0.72, 0.28])
-
         self._ax_map = self._fig.add_subplot(gs_left[0, 0])
         self._ax_map.set_aspect("equal", adjustable="box")
         self._ax_map.set_title("Vista 2D: Dron y Receptores")
@@ -309,7 +319,7 @@ class DroneEnv(gym.Env):
         self._ax_list.set_title("Posiciones y PRx (dBm)")
         self._ax_list.axis("off")
 
-        # Subgrilla derecha (tablas: arriba métricas, abajo bloques)
+        #Panel Derecho: Tablas de métricas
         gs_right = gs[0, 1].subgridspec(3, 1, height_ratios=[0.01, 0.55, 0.35], hspace=0.15)
         self._ax_spaces=self._fig.add_subplot(gs_right[0, 0])
         self._ax_spaces.axis("off")
@@ -319,17 +329,17 @@ class DroneEnv(gym.Env):
             ax.axis("off")
         self._ax_table_top.set_title("Métricas de canal por receptor")
 
-        # Canvas Agg, común a human y rgb_array
+        #Canvas Agg: Permite renderizar a un array de NumPy sin necesidad de interfaz gráfica (Headless mode)
         self._canvas = FigureCanvas(self._fig)
-        
+
+        #Modo interactivo para visualización humana en tiempo real
         if self.render_mode == "human":
             try:
                 self._auto_view_2d(margin_ratio=getattr(self, "view_margin", 0.05))
             except Exception:
                 pass
-
-            plt.ion()  # modo interactivo
-            plt.show(block=False)  # muestra la ventana SIN bloquear
+            plt.ion()
+            plt.show(block=False)
 
         if self.render_mode == "rgb_array":
             try:
@@ -338,17 +348,24 @@ class DroneEnv(gym.Env):
                 pass
 
     def _render_common(self):
+        """
+        Actualiza dinámicamente los datos del UI sin reconstruir la figura completa.
+
+        Por eficiencia computacional durante el entrenamiento RL, utiliza `set_offsets`
+        para mover los puntos en el scatter plot, evitando la costosa operación de
+        limpiar y redibujar (ax.clear()) los ejes en cada step.
+        """
         import numpy as np
         import matplotlib.pyplot as plt
 
         self._ensure_figure()
 
-        # --- Datos base ---
+        # --- Extracción de estado actual ---
         prx = np.asarray(self.rt.compute_prx_dbm(), dtype=float).reshape(-1)
         rx = self.receptores.positions_xyz()  # shape (N, 3)
         drone_xyz = np.asarray(self._start, dtype=float).reshape(3)
 
-        # === ACTUALIZAR STEP EN EL TÍTULO ===
+        # --- Actualización de Título ---
         if hasattr(self, '_suptitle'):
             antenna_mode = getattr(self.rt, "antenna_mode", "N/A")
             freq_mhz = getattr(self.rt, "freq_hz", 0) / 1e6
@@ -362,41 +379,41 @@ class DroneEnv(gym.Env):
 
             self._suptitle.set_text(title_text)
 
-        # ===== MAPA (izq/arriba) =====
+        # --- Actualización del Mapa 2D ---
         if self._sc_rx is None:
-            # Dron
+            #Dron
             self._sc_drone = self._ax_map.scatter([drone_xyz[0]], [drone_xyz[1]],
                                                   s=140, marker="^", zorder=3, label="Drone")
-            # Receptores coloreados por PRx
+            #Receptores
             self._sc_rx = self._ax_map.scatter(rx[:, 0], rx[:, 1], s=90, c=prx,
                                                cmap="viridis", zorder=2)
-            # Etiquetas con nombres (Drone, Rx0, Rx1, …)
-            # Nota: mostramos nombre al lado del punto
+            #Etiquetas con nombres (Drone, Rx0, Rx1, …)
             self._name_texts = []
             self._name_texts.append(self._ax_map.text(drone_xyz[0] + 1.0, drone_xyz[1] + 1.0,
                                                       "Drone", fontsize=9, weight="bold"))
             for i, (x, y, _) in enumerate(rx):
                 self._name_texts.append(self._ax_map.text(x + 1.0, y + 1.0, f"Rx{i}", fontsize=8))
-            # Colorbar
+
+            #Colorbar
             if self._cbar is None:
                 self._cbar = self._fig.colorbar(
                     self._sc_rx, ax=self._ax_map, label="PRx [dBm]",
-                    fraction=0.046, pad=0.04  # más compacta y con espacio
+                    fraction=0.046, pad=0.04
                 )
             else:
                 self._cbar.update_normal(self._sc_rx)
         else:
-            # actualizar posiciones/colores
+            #Actualización eficiente (posiciones y colores)
             self._sc_drone.set_offsets([[drone_xyz[0], drone_xyz[1]]])
             self._sc_rx.set_offsets(rx[:, :2])
             self._sc_rx.set_array(prx)
-            # actualizar textos (posiciones)
+
             self._name_texts[0].set_position((drone_xyz[0] + 1.0, drone_xyz[1] + 1.0))
             for i, (x, y, _) in enumerate(rx):
                 self._name_texts[i + 1].set_position((x + 1.0, y + 1.0))
 
-        # ===== LISTA (izq/abajo): posiciones + PRx =====
-        # Construimos un texto monoespaciado
+        # --- Actualización Panel Izquierdo Inferior ---
+        #Construimos un texto monoespaciado
         lines = []
         lines.append("ID      x[m]      y[m]      z[m]      PRx[dBm]")
         lines.append("------------------------------------------------")
@@ -412,7 +429,7 @@ class DroneEnv(gym.Env):
         self._ax_list.text(0.01, 0.98, text_block, va="top", ha="left",
                            family="monospace", fontsize=9)
 
-        # ===== TABLA DERECHA SUPERIOR: métricas por-UE =====
+        # --- Actualización Panel Derecho: métricas por UE ---
         self._ax_table_top.clear()
         self._ax_table_top.axis("off")
         self._ax_table_top.set_title(
@@ -426,14 +443,14 @@ class DroneEnv(gym.Env):
             self._ax_table_top.text(0.02, 0.95, "Sin métricas aún (esperando primer step)...",
                                     va="top", ha="left", fontsize=7, family="monospace")
         else:
-            # Encabezados (corrigimos columnas y añadimos TBLER_running)
+            #Encabezados
             headers = ["Receptor", "SINR eff(dB)", "SE(b/Hz)", "Shannon(b/Hz)", "SE vs Shannon(%)", "TBLER step",
                        "TBLER running"]
             line = "  ".join(f"{h:>14s}" for h in headers)
             sep = "-" * len(line)
             rows = [line, sep]
 
-            # Mapeo + formateo
+            #Mapeo y formateo
             def fmt(x, nd):
                 try:
                     xf = float(x)
@@ -441,17 +458,16 @@ class DroneEnv(gym.Env):
                 except Exception:
                     return "  NaN"
 
-            # Ordenar por id
+            #Ordenar por id
             for m in sorted(ue_metrics, key=lambda x: x["ue_id"]):
                 i = int(m["ue_id"])
                 sinr = m.get("sinr_eff_db", float('nan'))
                 se_la = m.get("se_la", float('nan'))
                 se_sh = m.get("se_shannon", float('nan'))
                 gap = m.get("se_gap_pct", float('nan'))
-                # OJO: tu dict usa la clave "tbler" (no "bler")
                 tbler_step = m.get("tbler", float('nan'))
 
-                # TBLER running (si no está disponible aún, deja NaN)
+                #TBLER running
                 tbler_run = float('nan')
                 if tbler_running_per_ue is not None and i < len(tbler_running_per_ue):
                     tbler_run = tbler_running_per_ue[i]
@@ -466,7 +482,6 @@ class DroneEnv(gym.Env):
                     f"{fmt(tbler_run, 3):>14s}",
                 ]))
 
-            # Leyenda breve con bler_target
             legend_lines = []
             legend_lines.append("TBLER step: 0 = ACK, 1 = NACK, NaN = no agendado")
             legend_lines.append("TBLER running: 1 - ACK acum / TX acum")
@@ -476,6 +491,7 @@ class DroneEnv(gym.Env):
                                     va="top", ha="left", family="monospace", fontsize=9)
 
     def _render_to_figure(self):
+        """Dibuja y actualiza la ventana gráfica (Modo Human)."""
         import matplotlib.pyplot as plt
         self._ensure_figure()
         self._render_common()
@@ -485,32 +501,35 @@ class DroneEnv(gym.Env):
 
     def _render_to_array(self) -> np.ndarray:
         """
-        Dibuja la figura en el canvas Agg y devuelve un frame RGB (H, W, 3) uint8.
+        Exporta el lienzo actual como un tensor RGB (H, W, 3).
+
+        Crítico para el modo 'rgb_array' de Gymnasium, permitiendo que wrappers
+        como `RecordVideo` capturen el entrenamiento del agente.
         """
         import numpy as np
 
-        # Asegura figura + ejes y pinta el contenido
+        #Asegura figura y ejes, además pinta el contenido
         self._ensure_figure()
         self._render_common()
 
-        # Dibuja en el canvas Agg
+        #Dibuja en el canvas Agg
         self._fig.canvas.draw()
 
-        # Tamaño en píxeles
+        #Tamaño en píxeles
         w, h = self._fig.canvas.get_width_height()
-        # Buffer RGBA (bytes) -> ndarray (h, w, 4)
+
+        #Buffer RGBA (bytes) -> ndarray (h, w, 4)
         buf = self._canvas.buffer_rgba()
         rgba = np.frombuffer(buf, dtype=np.uint8).reshape((h, w, 4))
 
-        # Quita alpha y copia (para que no sea una vista de solo-lectura)
         rgb = rgba[:, :, :3].copy()
         return rgb
 
     def _auto_view_2d(self, margin_ratio: float = 0.05):
         """
-        Ajusta la vista 2D usando los límites (min y max) entregados por SionnaRT.
-        Usa self.rt.scene_bounds = (min_xyz, max_xyz)
-        margin_ratio: margen porcentual extra alrededor de la escena.
+        Ajusta la escala de los ejes (vista 2D) basándose en el Bounding Box de la escena.
+        Desactiva el auto-scaling dinámico para evitar que el mapa "tiemble" si el dron
+        se mueve hacia los bordes.
         """
         import numpy as np
 
@@ -544,12 +563,14 @@ class DroneEnv(gym.Env):
         self._ax_map.autoscale_view(tight=True)
 
     def render(self):
+        """Delegador del metodo render estándar de la API de Gymnasium."""
         if self.render_mode == "human":
             self._render_to_figure()
         elif self.render_mode == "rgb_array":
             return self._render_to_array()
 
     def close(self):
+        """Limpieza profunda de memoria gráfica al cerrar el entorno."""
         import matplotlib.pyplot as plt
         if self._fig is not None:
             plt.close(self._fig)
@@ -559,6 +580,7 @@ class DroneEnv(gym.Env):
         self._bar_labels = []
 
     def _init_render_vars(self):
+        """Inicializa punteros nulos para los componentes del UI."""
         self._fig = None
         self._ax = None
         self._canvas = None
@@ -573,17 +595,19 @@ class DroneEnv(gym.Env):
         self._last_ue_metrics = None
 
     def _get_metrics_info(self):
+        """Extrae el diccionario de info auxiliar para la tupla (obs, reward, terminated, truncated, info)."""
         if self.run_metrics:
-            # Modo Lento (Física + Métricas)
+            #Modo Lento (Física + Métricas)
             sys_metrics = self.rt.run_sys_step()
             return {
                 "ue_metrics": sys_metrics["ue_metrics"],
                 "tbler_running_per_ue": sys_metrics.get("tbler_running_per_ue"),
             }
-        # Modo Rápido (Física)
+        #Modo Rápido (Física)
         return {"ue_metrics": [], "tbler_running_per_ue": []}
 
     def _handle_render(self, info):
+        """Actualiza el estado interno antes de disparar el renderizado."""
         self._last_ue_metrics = info["ue_metrics"]
         self._last_tbler_running_per_ue = info.get("tbler_running_per_ue", None)
         if self.render_mode == "human":
@@ -592,17 +616,25 @@ class DroneEnv(gym.Env):
             info["frame"] = self._render_to_array()
 
 
-    # ================= Render Profesional (Sin distinción LOS/NLOS) =================
+    # ================= Render Profesional =================
     def render_dual_snapshot(self,
                                   prx_theory_dbm,
                                   prx_rt_dbm,
                                   title="Comparación de PRx: modelo teórico vs trazado de rayos",
                                   left_label="Modelo teórico (referencia)",
                                   right_label="Modelo por trazado de rayos (Sionna RT)",
-                                  draw_links_theory=True,   # líneas SOLO en teórico (izq)
-                                  draw_links_rt=False,      # RT (der) SIN líneas
+                                  draw_links_theory=True,   #Líneas solo en modeloteórico
+                                  draw_links_rt=False,      #Modelo RT sin líneas
                                   save=True,
                                   scene_pad_ratio=0.02):
+        """
+        Genera una visualización analítica comparando el modelo de Large-Scale Fading
+        teórico (Log-Distance Pathloss) vs. el simulador electromagnético (Ray Tracing).
+
+        Esta gráfica es ideal para validación científica, demostrando cómo el
+        trazado de rayos captura sombras de edificios y desvanecimientos (Shadowing) que
+        la teoría empírica simple ignora.
+        """
         import numpy as np
         import matplotlib.pyplot as plt
         from pathlib import Path
@@ -611,20 +643,16 @@ class DroneEnv(gym.Env):
         from matplotlib.lines import Line2D
         from datetime import datetime
 
-        # ----------------------------
-        # Inputs
-        # ----------------------------
+        #Inputs
         prx_theory_dbm = np.asarray(prx_theory_dbm, dtype=float).reshape(-1)
         prx_rt_dbm     = np.asarray(prx_rt_dbm,     dtype=float).reshape(-1)
 
-        rx = np.asarray(self.mobility_manager.get_positions_xyz(), dtype=float)  # (N,3)
+        rx = np.asarray(self.mobility_manager.get_positions_xyz(), dtype=float)  #(N,3)
         N = rx.shape[0]
         assert prx_theory_dbm.size == N and prx_rt_dbm.size == N, \
             "PRx debe tener largo N (nº de receptores)."
 
-        # ----------------------------
-        # Pose/posición del dron
-        # ----------------------------
+        #Posición del dron
         pose = self.dron_Realista.get_pose()
         if isinstance(pose, (list, tuple)) and len(pose) > 0:
             pos = np.asarray(pose[0], dtype=float).reshape(-1)
@@ -634,14 +662,10 @@ class DroneEnv(gym.Env):
         drone_xyz = np.array([pos[0], pos[1], pos[2] if pos.size >= 3 else 0.0], dtype=float)
         h_tx = float(drone_xyz[2]) if np.isfinite(drone_xyz[2]) else np.nan
 
-        # ----------------------------
-        # Distancia 3D (para tabla)
-        # ----------------------------
+        # Distancia 3D
         d3d = np.linalg.norm(rx[:, :3] - drone_xyz[:3], axis=1)
 
-        # ----------------------------
-        # Parámetros RF (SOLO f y Pt)
-        # ----------------------------
+        # Parámetros RF
         def _get_float(obj, name, default=np.nan):
             try:
                 return float(getattr(obj, name, default))
@@ -662,9 +686,7 @@ class DroneEnv(gym.Env):
         rf_parts.append(f"Pt={pt_dbm:.1f} dBm" if np.isfinite(pt_dbm) else "Pt=N/A")
         rf_str = " | ".join(rf_parts)
 
-        # ----------------------------
-        # Bounds de escena (x/y) para grilla y márgenes
-        # ----------------------------
+        #Bounds de escena (x/y) para grilla y márgenes
         def _get_scene_bounds_xy():
             sb = getattr(self, "scene_bounds", None)
             if sb is None and hasattr(self, "rt") and hasattr(self.rt, "scene_bounds"):
@@ -686,17 +708,13 @@ class DroneEnv(gym.Env):
             ax.set_xlim(xmin - dx, xmax + dx)
             ax.set_ylim(ymin - dy, ymax + dy)
 
-        # ----------------------------
         # Escala de color común
-        # ----------------------------
         vmin = float(np.nanmin([np.nanmin(prx_theory_dbm), np.nanmin(prx_rt_dbm)]))
         vmax = float(np.nanmax([np.nanmax(prx_theory_dbm), np.nanmax(prx_rt_dbm)]))
         norm = Normalize(vmin=vmin, vmax=vmax)
         cmap = "viridis"
 
-        # ----------------------------
-        # Figura: 2 mapas + tabla
-        # ----------------------------
+        # Figura: 2 mapas y tabla
         fig = plt.figure(figsize=(14.5, 7.5), dpi=120)
         gs = fig.add_gridspec(2, 2, height_ratios=[1.0, 0.42], hspace=0.10, wspace=0.18)
 
@@ -708,9 +726,7 @@ class DroneEnv(gym.Env):
         fig.suptitle(title, y=0.98, fontsize=14, weight="bold")
         fig.text(0.5, 0.945, rf_str, ha="center", va="center", fontsize=9)
 
-        # ----------------------------
         # Leyenda: altura del dron + receptores
-        # ----------------------------
         tx_label = f"Tx (Dron)  z={h_tx:.1f} m" if np.isfinite(h_tx) else "Tx (Dron)"
         legend_handles = [
             Line2D([0], [0], marker="^", linestyle="None", markerfacecolor="none",
@@ -719,9 +735,7 @@ class DroneEnv(gym.Env):
                 markeredgecolor="k", markersize=8, label="Rx (Receptores)")
         ]
 
-        # ----------------------------
         # Panel plot
-        # ----------------------------
         def _plot_panel(ax, prx_dbm, panel_title, draw_links):
             # Líneas Tx->Rx (solo si se pide)
             if draw_links:
@@ -730,17 +744,17 @@ class DroneEnv(gym.Env):
                             [drone_xyz[1], rx[i, 1]],
                             linestyle="-", linewidth=1.0, alpha=0.18, color="black")
 
-            # Receptores (coloreados por PRx)
+            #Receptores (coloreados por PRx)
             ax.scatter(rx[:, 0], rx[:, 1],
                     c=prx_dbm, s=90, cmap=cmap, norm=norm,
                     edgecolors="k", linewidths=0.5)
 
-            # Tx (dron)
+            #Dron (TX)
             ax.scatter([drone_xyz[0]], [drone_xyz[1]],
                     marker="^", s=180, edgecolors="k",
                     facecolors="none", linewidths=1.2)
 
-            # Etiquetas: Rx arriba + potencia abajo del punto
+            #Etiquetas: Rx arriba y potencia abajo del punto
             for i in range(N):
                 x, y = rx[i, 0], rx[i, 1]
                 ax.text(x + 1.2, y + 1.2, f"Rx{i}", fontsize=8, weight="bold")
@@ -751,7 +765,7 @@ class DroneEnv(gym.Env):
             ax.set_xlabel("x [m]")
             ax.set_ylabel("y [m]")
 
-            # Aplicar límites de escena (para que la grilla tome márgenes de la escena)
+            #Aplicar límites de escena
             _apply_scene_bounds(ax, pad_ratio=scene_pad_ratio)
 
             ax.grid(True, alpha=0.25)
@@ -760,15 +774,13 @@ class DroneEnv(gym.Env):
         _plot_panel(axL, prx_theory_dbm, left_label, draw_links_theory)
         _plot_panel(axR, prx_rt_dbm,     right_label, draw_links_rt)   # RT sin líneas
 
-        # Colorbar única compartida
+        #Colorbar única compartida
         sm = ScalarMappable(norm=norm, cmap=cmap)
         sm.set_array([])
         cbar = fig.colorbar(sm, ax=[axL, axR], fraction=0.046, pad=0.02)
         cbar.set_label("PRx [dBm]")
 
-        # ----------------------------
         # Tabla inferior (SIN d2D)
-        # ----------------------------
         delta = prx_rt_dbm - prx_theory_dbm
         col_labels = ["Rx", "d3D [m]", "PRx teo [dBm]", "PRx RT [dBm]", "Δ [dB]"]
 
@@ -791,9 +803,7 @@ class DroneEnv(gym.Env):
         table.set_fontsize(9)
         table.scale(1, 1.25)
 
-        # ----------------------------
-        # Guardado
-        # ----------------------------
+        #Guardar figura
         if save:
             out_dir = Path("Environment-drones/figuras-comparacion-prx")
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -805,6 +815,3 @@ class DroneEnv(gym.Env):
 
         plt.show()
         return fig
-
-
-    

@@ -42,7 +42,7 @@ from env.environment.gymnasium_env import DroneEnv  # adapta si tu ruta difiere
 # ========= Configuración =========
 SCENE = "simple_street_canyon"  # p.ej. "santiago.xml", "munich" "simple_street_canyon"
 #SCENE = str(project_root / "Mapas-pruebas" / "xx-aaa.xml")
-DRONE_START = (40.0, 100.0, 10.0)
+DRONE_START = (-85.0, 0.0, 10.0)
 
 #Semilla (seed) de la simulación
 SEMILLA = 0
@@ -54,14 +54,8 @@ DT = 0.1
 NUM_AGENTS = 5
 
 #Posiciones iniciales
-#RX_POSITIONS = None
-RX_POSITIONS = [
-    (150.0, 200.0, 1.5),
-    (180.0, 200.0, 1.5),
-    (-100.0, -70.0, 1.5),
-    (250.0, 140.0, 1.5),
-    (220.0, 150.0, 1.5)
-]
+RX_POSITIONS = None
+
 """
 [
     (-500.0, -250.0, 1.5),  # Rx0: Estadio
@@ -77,13 +71,7 @@ RX_POSITIONS = [
 """
 
 #Metas de los receptores
-RX_GOALS = [
-    (25.0, 70.0, 1.5),
-    (25.0, 70.0, 1.5),
-    (25.0, 70.0, 1.5),
-    (25.0, 70.0, 1.5),
-    (25.0, 70.0, 1.5),
-]
+RX_GOALS = None
 
 
 
@@ -1831,7 +1819,7 @@ def main():
         out_gif = OUT_DIR / f"animacion_{scene_clean}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.gif"
         #out_gif = OUT_DIR / f"animacion_Universidad de Santiago de Chile_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.gif"
         print("Generando GIF...")
-        #make_gif(tracks, obstacles, bounds, out_path=out_gif)
+        make_gif(tracks, obstacles, bounds, out_path=out_gif)
         print(f"GIF guardado: {out_gif}")
         
 
