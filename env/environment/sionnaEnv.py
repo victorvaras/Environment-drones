@@ -249,7 +249,6 @@ Valores por default del PathSolver: {
     'los': True, 'specular_reflection': True, 'diffuse_reflection': False, 'refraction': True, 'seed': 42}
 """
 class SionnaRT:
-    """Gestión de escena y métricas con Sionna RT (sin fallback)."""
     """
     Gestión de la escena 3D y evaluación de métricas de red mediante Ray Tracing (Sionna RT).
 

@@ -54,14 +54,8 @@ DT = 0.1
 NUM_AGENTS = 5
 
 #Posiciones iniciales
-#RX_POSITIONS = None
-RX_POSITIONS = [
-    (150.0, 200.0, 1.5),
-    (180.0, 200.0, 1.5),
-    (-100.0, -70.0, 1.5),
-    (250.0, 140.0, 1.5),
-    (220.0, 150.0, 1.5)
-]
+RX_POSITIONS = None
+
 """
 [
     (-500.0, -250.0, 1.5),  # Rx0: Estadio
@@ -77,13 +71,7 @@ RX_POSITIONS = [
 """
 
 #Metas de los receptores
-RX_GOALS = [
-    (25.0, 70.0, 1.5),
-    (25.0, 70.0, 1.5),
-    (25.0, 70.0, 1.5),
-    (25.0, 70.0, 1.5),
-    (25.0, 70.0, 1.5),
-]
+RX_GOALS = None
 
 
 
