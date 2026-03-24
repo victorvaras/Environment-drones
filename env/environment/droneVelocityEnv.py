@@ -1,54 +1,48 @@
+#Importaciones
 from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Iterable, Tuple, List, Optional
-
 import numpy as np
 
-# PyFlyt
-from PyFlyt.core import Aviary  # Motor del simulador (PyBullet)
-
+#Importación PyFlyt
+from PyFlyt.core import Aviary  #Motor del simulador (PyBullet)
 
 # ----------------------------- Configuración ---------------------------------
-
 @dataclass
 class DroneVelocityEnvConfig:
-    # Pose inicial
+    #Posición inicial del dron
     start_xyz: Tuple[float, float, float] = (0.0, 0.0, 1.0)
-    start_rpy: Tuple[float, float, float] = (0.0, 0.0, 0.0)  # [roll, pitch, yaw] en rad
+    start_rpy: Tuple[float, float, float] = (0.0, 0.0, 0.0)  #[roll, pitch, yaw] en rad
 
-    # Frecuencias
+    #Frecuencias
     control_hz: int = 120
     physics_hz: int = 240
 
-    # Modo de control 
+    #Modo de control de vuelo
     mode: int = 6
 
-    # Render
+    #Render
     render: bool = False
 
-    # Modelo de dron: 'cf2x' (Crazyflie 2.x) o 'primitive_drone'
+    #Modelo de dron: 'cf2x' (Crazyflie 2.x) o 'primitive_drone'
     drone_model: str = "cf2x"
 
-    # Semilla y registro
+    #Semilla y registrode trayectorias
     seed: Optional[int] = None
     record_trajectory: bool = True
 
 
 # ----------------------------- Clase principal --------------------------------
-
 class DroneVelocityEnv:
 
     def __init__(self, 
                  cfg: DroneVelocityEnvConfig,
                  step_durations: float = 0.1
                  ):
-        
-        
+
         self.cfg = cfg
 
-
-        # Construcción del Aviary
+        #Construcción del Aviary
         start_pos = np.array([self.cfg.start_xyz], dtype=float)  # (1,3)
         start_orn = np.array([self.cfg.start_rpy], dtype=float)  # (1,3)
         drone_options = dict(control_hz=self.cfg.control_hz, drone_model=self.cfg.drone_model)
@@ -65,20 +59,19 @@ class DroneVelocityEnv:
 
         self.dt_control = 1.0 / float(self.cfg.control_hz)
 
-        # Historiales
+        #Historiales
         self.positions_history: List[np.ndarray] = []
         self.yaw_history: List[float] = []
-        self.cmd_history: List[np.ndarray] = []   # [vx, vy, vz, vr] o equivalente según modo
-        self.meas_history: List[np.ndarray] = []  # [vx, vy, vz, vr] medidos (mundo)
+        self.cmd_history: List[np.ndarray] = []   #[vx, vy, vz, vr] o equivalente según modo
+        self.meas_history: List[np.ndarray] = []  #[vx, vy, vz, vr] medidos (mundo)
 
         self.step_durations = step_durations
 
-        # Estado
+        #Estado
         self.default_mode = int(self.cfg.mode)
         self.reset()
 
-    # ---------------------------- utilidades base ------------------------------
-
+    # ---------------------------- Utilidades base ------------------------------
     def reset(self):
         self.env.reset()
         self.set_mode(self.default_mode)
@@ -120,8 +113,7 @@ class DroneVelocityEnv:
         rpy = np.asarray(st[1, :], dtype=float)
         return pos, rpy
 
-    # --------------------------- helpers internos ------------------------------
-
+    # --------------------------- Helpers internos ------------------------------
     def _run_for(self, dt: float, setpoint: np.ndarray, log_as: str):
         """
         Ejecuta 'dt' segundos aplicando 'setpoint' en cada paso de control.
@@ -132,7 +124,7 @@ class DroneVelocityEnv:
             raise ValueError("Setpoint contiene valores no finitos.")
         n_steps = max(1, int(round(dt / self.dt_control)))
 
-        # Previos para derivadas
+        #Previos para derivadas
         pos_prev, rpy_prev = self.get_pose()
         yaw_prev = float(rpy_prev[2])
 
@@ -144,26 +136,26 @@ class DroneVelocityEnv:
             yaw = float(rpy[2])
 
             if self.cfg.record_trajectory:
-                # 1) trayectoria
+                #1) Trayectoria
                 self.positions_history.append(pos.copy())
                 self.yaw_history.append(yaw)
 
-                # 2) comando -> lo registramos en formato [vx, vy, vz, vr] para comparar
+                #2) Comando -> lo registramos en formato [vx, vy, vz, vr] para comparar
                 if log_as == "mode6":
                     vx_cmd, vy_cmd, vr_cmd, vz_cmd = sp[0], sp[1], sp[2], sp[3]
                     self.cmd_history.append(np.array([vx_cmd, vy_cmd, vz_cmd, vr_cmd], dtype=float))
                 elif log_as == "mode4":
-                    # [u, v, vr, z] -> no hay vz comandado explícitamente
+                    #[u, v, vr, z] -> no hay vz comandado explícitamente
                     self.cmd_history.append(np.array([np.nan, np.nan, np.nan, sp[2]], dtype=float))
                 elif log_as == "mode7":
-                    # [x, y, r, z] -> comando de posición; no hay velocidades comandadas
+                    #[x, y, r, z] -> comando de posición; no hay velocidades comandadas
                     self.cmd_history.append(np.array([np.nan, np.nan, np.nan, np.nan], dtype=float))
                 else:
                     self.cmd_history.append(np.array([np.nan, np.nan, np.nan, np.nan], dtype=float))
 
-                # 3) medición (mundo) por derivada
+                #3) Medición (mundo) por derivada
                 dp = (pos - pos_prev) / self.dt_control
-                # Unwrap yaw para evitar saltos
+                #Unwrap yaw para evitar saltos
                 dyaw = np.unwrap([yaw_prev, yaw])[1] - np.unwrap([yaw_prev, yaw])[0]
                 vr_meas = dyaw / self.dt_control
                 self.meas_history.append(np.array([dp[0], dp[1], dp[2], vr_meas], dtype=float))
@@ -173,23 +165,19 @@ class DroneVelocityEnv:
 
         return pos, rpy
 
-    # Aplicacion de movimiento, para cualquier modo (interno)
+    #Aplicacion de movimiento, para cualquier modo (interno)
     def step_move(self, move: Iterable[float], dt: float):
-        
         sp = np.asarray(move, dtype=float).reshape(4,)
-
         pos, rpy = self._run_for(dt, sp, log_as="generic")
         return pos
 
-
     # ------------------------------- Gráficas ---------------------------------
-
     def plot_trajectory_3d(self, show: bool = True, save_path: Optional[str] = None):
         if not self.positions_history:
             print("[plot_trajectory_3d] No hay datos para graficar.")
             return
         import matplotlib.pyplot as plt
-        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+        from mpl_toolkits.mplot3d import Axes3D  #noqa: F401
 
         P = np.vstack(self.positions_history)
         fig = plt.figure(figsize=(7, 6))
@@ -249,7 +237,7 @@ class DroneVelocityEnv:
         import numpy as np
         import matplotlib.pyplot as plt
 
-        V_meas = np.vstack(self.meas_history)  # [vx, vy, vz, vr] medidos
+        V_meas = np.vstack(self.meas_history)  #[vx, vy, vz, vr] medidos
         N = V_meas.shape[0]
         t = np.arange(N, dtype=float) * self.dt_control
         labels = [r"$v_x$ [m/s]", r"$v_y$ [m/s]", r"$v_z$ [m/s]", r"$\dot{\psi}$ [rad/s]"]
@@ -293,7 +281,7 @@ class DroneVelocityEnv:
 
         if overlay_vz and N >= 2:
             vz = np.diff(z, prepend=z[0]) / float(self.dt_control)
-            # suavizado simple si se pide
+            #Suavizado simple si se pide
             if isinstance(smooth_window, int) and smooth_window > 1:
                 k = int(smooth_window)
                 kernel = np.ones(k, dtype=float) / float(k)
@@ -302,7 +290,7 @@ class DroneVelocityEnv:
             ax2 = ax.twinx()
             ax2.plot(t, vz, linestyle="--", linewidth=1.5, alpha=0.7, label="v_z [m/s]")
             ax2.set_ylabel("v_z [m/s]")
-            # leyenda combinada
+            #Leyenda combinada
             L1, l1 = ax.get_legend_handles_labels()
             L2, l2 = ax2.get_legend_handles_labels()
             ax.legend(L1 + L2, l1 + l2, loc="best")
@@ -348,12 +336,9 @@ class DroneVelocityEnv:
         self.plot_xyz_dual_x_from_step_durations(
             show=False,
             save_path=files["xyz_dualx_steps"],
-            separate=False  # genera _x, _y, _z
+            separate=False  #Genera _x, _y, _z
         )
-
         return files
-    
-
 
     def _build_step_time_maps_from_durations(self, N: int):
         """
@@ -371,14 +356,14 @@ class DroneVelocityEnv:
 
         sd = self.step_durations
         dtc = float(self.dt_control)
-        T_end = (N - 1) * dtc  # tiempo del último sample
+        T_end = (N - 1) * dtc  #Tiempo del último sample
 
-        # Normaliza a vector de duraciones
+        #Normaliza a vector de duraciones
         if np.isscalar(sd):
             d = float(sd)
             if d <= 0:
                 raise ValueError("step_durations (escala) debe ser > 0.")
-            # Número de steps necesarios para cubrir el horizonte de tiempos
+            #Número de steps necesarios para cubrir el horizonte de tiempos
             n_steps = max(1, int(np.ceil((N * dtc) / d)))
             durations = np.full(n_steps, d, dtype=float)
         else:
@@ -389,12 +374,12 @@ class DroneVelocityEnv:
                 raise ValueError("Todos los step_durations deben ser > 0.")
             n_steps = durations.size
 
-        # Bordes acumulados de cada step: [0, d0, d0+d1, ...]
+        #Bordes acumulados de cada step: [0, d0, d0+d1, ...]
         edges = np.concatenate([[0.0], np.cumsum(durations)])
-        # Asegura cubrir al menos hasta T_end
+        #Asegura cubrir al menos hasta T_end
         if edges[-1] < T_end:
-            # Si el vector no alcanza, amplía repetendo el último duration para cubrir t (no interpretamos contenido;
-            # solo extendemos linealmente para poder mostrar eje; si prefieres, puedes lanzar error aquí).
+            #Si el vector no alcanza, amplía repetendo el último duration para cubrir t (no interpretamos contenido;
+            #solo extendemos linealmente para poder mostrar eje; si prefieres, puedes lanzar error aquí).
             extra_needed = T_end - edges[-1]
             n_extra = int(np.ceil(extra_needed / durations[-1]))
             durations = np.concatenate([durations, np.full(n_extra, durations[-1], float)])
@@ -434,15 +419,15 @@ class DroneVelocityEnv:
             print("[plot_xyz_dual_x_from_step_durations] No hay datos para graficar.")
             return
 
-        P = np.vstack(self.positions_history)  # (N,3)
+        P = np.vstack(self.positions_history)  #(N,3)
         N = P.shape[0]
         dtc = float(self.dt_control)
         t = np.arange(N, dtype=float) * dtc
 
-        # Mapeos basados 100% en self.step_durations
+        #Mapeos basados 100% en self.step_durations
         time_to_step, step_to_time, edges, n_steps = self._build_step_time_maps_from_durations(N)
 
-        # Formateador entero para el eje superior (Step)
+        #Formateador entero para el eje superior (Step)
         int_formatter = FuncFormatter(lambda v, _: f"{int(round(v))}")
 
         coord_labels = ["X [m]", "Y [m]", "Z [m]"]
@@ -499,6 +484,3 @@ class DroneVelocityEnv:
             if show:
                 plt.show()
             plt.close(fig)
-
-
-

@@ -4,43 +4,55 @@ from scipy.spatial import cKDTree
 
 class SpawnManager:
     """
-    Gestor de posiciones iniciales y metas para receptores.
+    Módulo de gestión de posiciones iniciales y metas para receptores (UE).
 
-    Con este metodo se garantiza:
-    1.No colisión con obstáculos (usando KD-Tree sobre la nube de puntos del Slicer).
-    2.No colisión entre agentes o receptores.
-    3.Altura Z fija (para simulación).
+    Este componente revisa la topología del escenario antes de iniciar la simulación,
+    asegurando que los receptores cumplan con las condiciones y restricciones fisicas del simulador.
     """
 
     def __init__(self, obstacles_np_list, bounds_min, bounds_max):
         """
+        Se inicializa el gestor espacial de obstáculos.
+
         Args:
-            obstacles_np_list: Lista de arrays (N,2) que vienen del Slicer (get_sfm_obstacles).
-            bounds_min: Tupla (x_min, y_min) de la escena.
-            bounds_max: Tupla (x_max, y_max) de la escena.
+            obstacles_np_list: Nube de puntos proveniente del Slicer (Lista de arrays (N,2)).
+                               Define la geometría de los obstaculos del escenario.
+            bounds_min/max: Límites del espacio en metros. (x_min, y_min) y (x_max, y_max) de la escena.
         """
-        #Se aplana la lista de obstáculos en una sola matriz para su uso en KD-Tree
+        #Se consolida la geometría de obstáculos (lista de obstáculos) en una matriz global (N, 2).
         if obstacles_np_list and len(obstacles_np_list) > 0:
             self.all_obstacles = np.vstack(obstacles_np_list)
-            #Se crea el árbol de búsqueda espacial (KD-Tree) para realizar consultas rápidas
+
+            #Se implementa el árbol de búsqueda espacial (cKD-Tree) para realizar consultas y búsquedas rápidas.
             self.tree = cKDTree(self.all_obstacles)
         else:
             self.all_obstacles = None
             self.tree = None
 
-        #Se asignan los valores de la escena
+        #Se asignan los valores de los límites de la escena
         self.bounds_min = np.array(bounds_min)
         self.bounds_max = np.array(bounds_max)
 
-    #Generador de posiciones
     def generate_positions(self,
-                           n_agents: int, #Número de receptores
-                           min_dist_obs: float,  #Distancia   con los obstáculos (basado en 'r' de SFM)
-                           min_dist_agents: float,  #Distancia mínima entre receptores (basada en 'sigma' de SFM)
-                           z_height: float = 1.5,  #Altura fija de los receptores
+                           n_agents: int,
+                           min_dist_obs: float,
+                           min_dist_agents: float,
+                           z_height: float = 1.5,
                            max_retries: int = 10000):
+        """
+        Genera coordenadas cartesianas [x, y, z] para los receptores.
+        La lógica de rechazo asegura que los receptores no inicien en estados de
+        colisión inminente, lo que desestabilizaría las fuerzas del SFM.
 
-        #Puntos válidos para posiciones e intentos
+        Args:
+            n_agents: Número de receptores.
+            min_dist_obs: Distancia con los obstáculos (basado en 'r' del SFM).
+            min_dist_agents: Distancia mínima entre receptores (basada en 'sigma' del SFM).
+            z_height: Altura fija de los receptores.
+            max_retries: Cantidad máxima de reintentos en la búsqueda de posiciones.
+        """
+
+        #Coordenadas o puntos válidos para posiciones e intentos de búsqueda
         valid_points = []
         attempts = 0
 
@@ -69,9 +81,9 @@ class SpawnManager:
                 dists_agents = np.linalg.norm(existing_xy - rand_xy, axis=1)
 
                 if np.min(dists_agents) < min_dist_agents:
-                    continue  #Se rechaza, dado que esta muy cerca de otra receptor (viola radio 'sigma')
+                    continue  #Se rechaza, dado que esta muy cerca de otro receptor (viola radio 'sigma')
 
-            #4.Aceptación: se le agrega la altura Z fija y es agregado a los puntos válidos
+            #4.Aceptación: si cumple con las dos validaciones se le agrega la altura Z fija y es agregado a los puntos válidos
             valid_points.append((float(rand_xy[0]), float(rand_xy[1]), float(z_height)))
 
         return valid_points

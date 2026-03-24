@@ -10,27 +10,30 @@ from .spawn_manager import SpawnManager
 
 @dataclass
 class Receptor:
-    """Datos básicos del receptor (posición inicial)."""
+    """Clase con datos del receptor. Coordenadas de posición [x, y, z]"""
     x: float
     y: float
     z: float
 
 class ReceptorMobilityManager:
     """
-    Gestor centralizado de la movilidad de los receptores.
-    Social Force Model, Control Reactivo y Validación Física.
+    Gestor centralizado de la movilidad de los receptores basado en Social Force Model (SFM).
+    Controla la dinámica de los receptores terrestres, integrando fuerzas
+    sociales de repulsión y validación física contra obstáculos.
     """
 
     def __init__(self, sionna_rt, bounds_min, bounds_max, dt_sim=0.1,
                  sfm_v0=5.0, sfm_sigma=0.5, sfm_u0=80.0, sfm_r=0.5):
         """
+        Configura los parámetros físicos para la movilidad.
+
         Args:
             sionna_rt: Instancia de SionnaRT para validación de rayos y actualización de agentes.
-            bounds_min/max: Límites de la escena para el SpawnManager.
-            sfm_*: Parámetros físicos del modelo de fuerzas sociales.
+            bounds_min/max: Límites de la escena para utilizar en el SpawnManager.
+            sfm_*: Parámetros físicos del SFM (radios y fuerzas de repulsión).
         """
 
-        #Parámetros Sionna y escena
+        #Parámetros de Sionna y de la escena
         self.rt = sionna_rt
         self.bounds_min = bounds_min
         self.bounds_max = bounds_max
@@ -38,14 +41,14 @@ class ReceptorMobilityManager:
         #Paso de tiempo físico (dt de tiempo)
         self.dt_sim = dt_sim
 
-        #Parámetros SFM y SpawnManager
+        #Parámetros del SFM y SpawnManager
         #Parámetros Potencial Agente-Agente (PedPed)
         self.sfm_v0 = sfm_v0        #Fuerza de repulsión entre receptores
         self.sfm_sigma = sfm_sigma  #Alcance de la fuerza (radio personal)
 
         #Parámetros Potencial Agente-Obstáculo (PedSpace)
         self.sfm_u0 = sfm_u0  #Magnitud de la fuerza repulsiva del muro u obstáculo
-        self.sfm_r = sfm_r    #Radio de influencia (distancia a la que el muro empieza a "empujar")
+        self.sfm_r = sfm_r    #Radio de influencia (distancia a la que el muro empieza a repeler)
 
         #Estado interno
         self.sfm_sim = None             #Simulador SFM
@@ -57,13 +60,15 @@ class ReceptorMobilityManager:
 
     def configure_obstacles(self, obstacles_np_list):
         """
-        Recibe la lista de obstáculos del Slicer de Sionna.
-        Configura el SpawnManager y prepara los tensores para SFM.
+        Recibe la lista de obstáculos del Slicer y prepara la topología de los obstáculos.
+
+        Args:
+            obstacles_np_list: Lista de arrays con la geometría de los obstáculos de la escena.
         """
         #1.Se configura SpawnManager
         self.spawn_manager = SpawnManager(obstacles_np_list, self.bounds_min, self.bounds_max)
 
-        #2.Se preparan los obstáculos para SFM (Torch)
+        #2.Se preparan los obstáculos para el SFM (Torch)
         #Se convierte la lista de Numpy a lista de Tensores PyTorch
         #Requisito de socialforce para cálculo vectorizado
         self.obstacles_torch = [torch.tensor(o, dtype=torch.float32) for o in obstacles_np_list]
@@ -72,30 +77,33 @@ class ReceptorMobilityManager:
     def reset(self, num_agents, rx_positions=None, rx_goals=None, seed=None):
         """
         Reinicia la simulación peatonal para un nuevo episodio.
-        Genera posiciones/metas (si no se dan de manera estática) y reconstruye el simulador SFM.
+        Además de generar posiciones/metas (si no se entregan de manera estática)
+        y reconstruye el simulador SFM.
 
-        Returns:
-            ReceptoresManager: La instancia con los agentes creados.
+        Args:
+            num_agents: Cantidad de receptores (UEs).
+            rx_positions/goals: Posiciones y metas.
+            seed: Semilla para reproducibilidad experimental.
         """
 
         #Se recarga la semilla para la simulación
         if seed is not None:
             np.random.seed(seed)
 
-        #Validar que el SpawnManager esté listo si vamos a necesitar generar algo
+        #Validar que el SpawnManager esté listo por si se necesita generar algo
         if (rx_positions is None or rx_goals is None) and self.spawn_manager is None:
             raise RuntimeError("ERROR: Debes llamar a configure_obstacles() antes del reset dinámico.")
 
-        #Márgenes de seguridad (Solo se usan si hay que generar las posiciones iniciales)
-        #Margen con los obstáculos: para que no se creen ya sintiendo la fuerza del muro
+        #Márgenes de seguridad (Solo se utilizan si se requiere generar las posiciones iniciales)
+        #Margen con los obstáculos: para que no se creen sintiendo la fuerza del muro
         safe_wall_dist = self.sfm_r * 1.5
 
-        #Margen entre receptores: para que no se creen ya sintiendo la fuerza de otro receptor
+        #Margen entre receptores: para que no se creen sintiendo la fuerza de otro receptor
         safe_agent_dist = self.sfm_sigma * 2.2
 
         #Lógica de posiciones iniciales de receptores
         if rx_positions is None:
-            #Caso 1: Generación Dinámica (No se entregan posiciones)
+            #Caso 1: Generación Dinámica (No se entregan posiciones iniciales)
             rx_positions = self.spawn_manager.generate_positions(
                 n_agents=num_agents,             #Número de receptores
                 min_dist_obs=safe_wall_dist,     #Distancia segura contra obstáculos
@@ -111,7 +119,7 @@ class ReceptorMobilityManager:
 
         #Lógica de metas de receptores
         #Se realiza de manera independiente.
-        #Esto dado que si faltan metas (aunque haya posiciones manuales), se generan.
+        #Esto debido a que si faltan metas (aunque haya posiciones manuales), se generen.
         #Generar Metas (Goals) si no existen
         if rx_goals is None:
             rx_goals = self.spawn_manager.generate_positions(
@@ -121,7 +129,7 @@ class ReceptorMobilityManager:
                 z_height=1.5                    #Altura para receptores
             )
 
-        #Ahora que se tienen las posiciones iniciales (manuales o generadas), se crean los objetos
+        #Ahora que se tienen las posiciones iniciales (manuales o generadas), se generan los objetos
         self.receptores = [Receptor(*p) for p in rx_positions]
 
         #Potencial Agente-Agente (PedPed)
@@ -135,9 +143,9 @@ class ReceptorMobilityManager:
 
         #Potencial Agente-Obstáculo (PedSpace)
         ped_space = potentials.PedSpacePotential(
-            self.obstacles_torch, #Se inyecta el mapa de obstáculos extraído de Sionna.
+            self.obstacles_torch, #Se inyecta el mapa de obstáculos extraído por el Slicer.
             u0=self.sfm_u0,       #Magnitud de la fuerza repulsiva del muro u obstáculo
-            r=self.sfm_r          #Radio de influencia (distancia a la que el muro empieza a "empujar")
+            r=self.sfm_r          #Radio de influencia (distancia a la que el muro empieza a "repeler")
         )
 
         #Inicialización del Simulador SFM
@@ -162,7 +170,7 @@ class ReceptorMobilityManager:
         self.sfm_goals_2d = np_goals[:, :2]
 
         #Inicialización de variables
-        n = current_n #
+        n = current_n
         initial_state = np.hstack([
             np_initial[:, :2],                    #Columna 0-1: Posición inicial (x, y)
             np.zeros((n, 2)),                     #Columna 2-3: Velocidad inicial (vx, vy)
@@ -180,8 +188,8 @@ class ReceptorMobilityManager:
     def step(self):
         """
         Ejecuta UN paso de simulación completo:
-        1.SFM (Cálculo de fuerzas sociales)
-        2.Control Reactivo (Anti-Atascos) (Corrección de mínimos locales y estancamiento.)
+        1.Cálculo de SFM
+        2.Control Reactivo (Anti-Atascos) (Corrección de mínimos locales y estancamiento)
         3.Validación Sionna (Colisiones duras)
         4.Cálculo de Velocidad Real (Doppler)
         """
@@ -229,7 +237,7 @@ class ReceptorMobilityManager:
                 #Determinismo por ID del receptor (Par/Impar)
                 #Se usa el índice 'i' del agente.
                 #Esto garantiza que el agente nunca cambie de opinión a mitad de camino.
-                #Si i es par -> Gira a un lado. Si es impar -> Gira al otro.
+                #Si i es par -> Gira a la derecha. Si es impar -> Gira a la izquierda.
                 if i % 2 == 0:
                     tangent = -tangent
 
@@ -263,7 +271,7 @@ class ReceptorMobilityManager:
 
             #Chequeo de Colisión Dura (Hard Collision)
             #Si a pesar de las fuerzas de repulsión, el agente intenta atravesar un muro u obstáculo
-            #el motor de física (Sionna) lo detiene.
+            #El motor de física (Sionna) lo detiene.
             if self.rt.is_move_valid_receptores(p_curr, p_next):
                 #Movimiento Válido: se actualiza la física (posición) y estado
                 rx.position = [next_x, next_y, z_fixed]
@@ -284,7 +292,7 @@ class ReceptorMobilityManager:
                 new_validated_state_np[i, 0:2] = [prev_x, prev_y]
                 new_validated_state_np[i, 2:4] = [0.0, 0.0]
 
-        #5.Se guarda y actualizar el Tensor SFM del estado para ser utilizado el siguiente ciclo
+        #5.Se guarda y actualiza el Tensor SFM del estado para ser utilizado en el siguiente ciclo
         self.sfm_current_state = torch.tensor(new_validated_state_np, dtype=torch.float32)
 
     #Helper para obtener posiciones como un array
