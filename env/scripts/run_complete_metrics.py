@@ -42,7 +42,7 @@ from env.environment.gymnasium_env import DroneEnv  # adapta si tu ruta difiere
 # ========= Configuración =========
 SCENE = "munich"  # p.ej. "santiago.xml", "munich" "simple_street_canyon"
 #SCENE = str(project_root / "Mapas-pruebas" / "xx-aaa.xml")
-DRONE_START = (40.0, 100.0, 10.0)
+DRONE_START = (-85.0, 0.0, 10.0)
 
 #Semilla (seed) de la simulación
 SEMILLA = 0
@@ -74,6 +74,7 @@ RX_POSITIONS = [
     (230.0,   45.0, 1.5),   # Rx7: Facultad de Ingeniería
     (150.0,   50.0, 1.5),   # Rx8: Casas
 ]
+"""
 
 #Metas de los receptores
 RX_GOALS = [
@@ -1831,7 +1832,7 @@ def main():
         out_gif = OUT_DIR / f"animacion_{scene_clean}_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.gif"
         #out_gif = OUT_DIR / f"animacion_Universidad de Santiago de Chile_{NUM_AGENTS} agentes_{SEMILLA} (seed)_{MAX_STEPS} steps.gif"
         print("Generando GIF...")
-        #make_gif(tracks, obstacles, bounds, out_path=out_gif)
+        make_gif(tracks, obstacles, bounds, out_path=out_gif)
         print(f"GIF guardado: {out_gif}")
         
 
