@@ -89,7 +89,7 @@ RX_GOALS = [
 
 
 #Máximo de pasos para la simulación (N° de steps de la simulación)
-MAX_STEPS = 10
+MAX_STEPS = 100
 
 # Compara dos frecuencias (en MHz). Cambia a lo que necesites.
 FREQS_MHZ = [3500.0] #28000
